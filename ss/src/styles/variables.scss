@@ -1,0 +1,38 @@
+// --------------------------- 侧边栏样式变量配置 ---------------------------
+// 基础文字颜色
+$menuText:#1D2129;                 // 菜单默认文字颜色
+$menuActiveText:#6A35FF;           // 菜单激活（选中）状态文字颜色
+$subMenuActiveText:#6A35FF;        // 子菜单激活（选中）状态文字颜色
+
+// 菜单背景与交互颜色
+$menuBg:#ffffff;                   // 菜单默认背景色
+$menuBgColor:#1D2129;              // 菜单背景对应的文字基础色（备用变量）
+$menuHover:#6A35FF;                // 菜单鼠标悬浮时的背景色
+$menuHoverColor:#1d0f0f;           // 菜单鼠标悬浮时的文字颜色
+
+// 子菜单背景与交互颜色
+$subMenuBg:#fff;                   // 子菜单默认背景色
+$subMenuBgColor:#1D2129;           // 子菜单背景对应的文字基础色（备用变量）
+$subMenuHover:#ffffff;             // 子菜单鼠标悬浮时的背景色
+$subMenuHoverColor: #6A35FF;       // 子菜单鼠标悬浮时的文字颜色
+
+// 布局尺寸
+$sideBarWidth: 258px;              // 侧边栏宽度
+
+// --------------------------- 变量导出配置 ---------------------------
+// :export 指令是 webpack 特有的功能，用于将 SCSS 变量导出为 JS 可访问的对象
+// 参考文档：https://www.bluematador.com/blog/how-to-share-variables-between-js-and-sass
+:export {
+  menuText: $menuText;                     // 导出菜单默认文字颜色
+  menuActiveText: $menuActiveText;         // 导出菜单激活状态文字颜色
+  subMenuActiveText: $subMenuActiveText;   // 导出子菜单激活状态文字颜色
+  menuBg: $menuBg;                         // 导出菜单默认背景色
+  menuHover: $menuHover;                   // 导出菜单悬浮背景色
+  subMenuBg: $subMenuBg;                   // 导出子菜单默认背景色
+  subMenuHover: $subMenuHover;             // 导出子菜单悬浮背景色
+  subMenuHoverColor: $subMenuHoverColor;   // 导出子菜单悬浮文字颜色
+  menuHoverColor: $menuHoverColor;         // 导出菜单悬浮文字颜色
+  menuBgColor: $menuBgColor;               // 导出菜单背景文字基础色
+  subMenuBgColor: $subMenuBgColor;         // 导出子菜单背景文字基础色
+  sideBarWidth: $sideBarWidth;             // 导出侧边栏宽度
+}

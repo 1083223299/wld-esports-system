@@ -1,0 +1,87 @@
+/* ============================================================
+ * 全局基础样式
+ * ============================================================ */
+:root {
+  /* 兼容旧令牌（新代码优先使用 theme.css 中的 --status-* 语义色） */
+  --primary: #6a35ff;
+  --primary-hover: #8f5eff;
+  --primary-active: #4d23d9;
+  --primary-tint: #e7deff;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --text-main: #1d2129;
+  --text-sub: #8a94a6;
+  --border: #e8ecf3;
+  --bg-page: #f4f9fd;
+  --bg-card: #ffffff;
+  --sidebar-bg: #ffffff;
+  --sidebar-text: #1d2129;
+  --radius: 10px;
+  --shadow: 0 4px 14px -2px rgba(16, 24, 40, 0.07);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  font-family: var(--font-family, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
+  font-size: 14px;
+  color: var(--text-main);
+}
+
+html,
+body {
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+#app {
+  background: var(--bg-page);
+  /* border-radius: 20px; */
+  overflow: hidden;
+}
+
+body {
+  overflow: hidden;
+}
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+/* 文本选中态（跟随主题） */
+::selection {
+  background: var(--text-selection, rgba(106, 53, 255, 0.16));
+}
+
+/* 键盘导航焦点态（可访问性） */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* 数字等宽，让表格金额 / 订单号对齐更精致 */
+.tabular-nums,
+.tabular-nums * {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 通用弱化文字 */
+.text-sub {
+  color: var(--text-sub);
+}
+.text-faint {
+  color: var(--text-faint);
+}

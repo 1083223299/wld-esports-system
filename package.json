@@ -1,0 +1,35 @@
+{
+  "name": "futurecave-web-admin",
+  "version": "1.0.0",
+  "description": "俱乐部后台管理",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "cross-env VITE_APP_ENV=local vite",
+    "dev:local": "cross-env VITE_APP_ENV=local vite",
+    "dev:dev": "cross-env VITE_APP_ENV=dev vite",
+    "dev:test": "cross-env VITE_APP_ENV=test vite",
+    "dev:staging": "cross-env VITE_APP_ENV=staging vite",
+    "dev:prod": "cross-env VITE_APP_ENV=prod vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "build:local": "cross-env VITE_APP_ENV=local vite build",
+    "build:dev": "cross-env VITE_APP_ENV=dev vite build",
+    "build:test": "cross-env VITE_APP_ENV=test vite build",
+    "build:staging": "cross-env VITE_APP_ENV=staging vite build",
+    "build:prod": "cross-env VITE_APP_ENV=prod vite build"
+  },
+  "dependencies": {
+    "dayjs": "^1.11.13",
+    "element-plus": "^2.14.7",
+    "pinia": "^4.0.3",
+    "pinia-plugin-persistedstate": "^4.7.1",
+    "vue": "^3.5.43",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.10",
+    "cross-env": "^10.1.0",
+    "vite": "^8.3.4"
+  }
+}
