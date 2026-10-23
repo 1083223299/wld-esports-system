@@ -1,39 +1,93 @@
 <script setup>
-import { computed, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import AppModal from '../../../components/AppModal.vue';
 import DataTable from '../../../components/DataTable.vue';
 import { useToast } from '../../../composables/useToast';
-import {
-  FLOW_TYPE_OPTIONS,
-  WITHDRAW_RULES,
-  buildFlowRows,
-  walletAccount,
-} from './mockData';
+import { walletApi } from '../../../api/modules/wallet';
+import { WITHDRAW_RULES, FLOW_TYPE_TEXT } from './mockData';
 
 /**
- * 财务管理 > 我的钱包
- * 顶部可提现余额卡片 + 钱包明细流水表格 + 提现弹窗（含二次确认 / 错误提示）
+ * 财务管理 > 我的钱包（真实接口联调）
+ * - GET  /api/club/wallets/me           顶部可提现余额（income）
+ * - GET  /api/club/wallets/txns         钱包明细流水（服务端分页 / walletType 筛选）
+ * - POST /api/club/wallets/withdraw     提现（幂等 requestId，PROCESSING 异步回查）
+ * - GET  /api/club/wallets/withdrawals  提现单状态
+ * 说明：收款信息接口未下发，前端本地持久化；当天提交次数后端未下发，前端按天计数。
  */
 const { show } = useToast();
 
-/* ================= 钱包账户（mock，可在弹窗内修改） ================= */
-const account = reactive({ ...walletAccount });
+/* ================= 钱包余额（GET /api/club/wallets/me） ================= */
+const wallet = reactive({ income: 0, deposit: 0, walletFrozen: false });
+const loadingWallet = ref(false);
 
-/* ================= 钱包明细筛选 ================= */
-const filter = reactive({
-  type: '',
-  startTime: '',
-  endTime: '',
-});
+const withdrawableBalance = computed(() => Number(wallet.income) || 0);
 
-// 类型下拉选项（含"全部"）
-const typeOptions = computed(() => [
+async function loadWallet() {
+  loadingWallet.value = true;
+  try {
+    const data = await walletApi.me();
+    wallet.income = Number(data?.income) || 0;
+    wallet.deposit = Number(data?.deposit) || 0;
+    wallet.walletFrozen = !!data?.walletFrozen;
+  } catch {
+    // 错误提示已由 request.js 统一 toast
+  } finally {
+    loadingWallet.value = false;
+  }
+}
+
+/* ================= 收款信息（接口未下发，本地持久化） ================= */
+const PAY_INFO_KEY = 'club_wallet_pay_info';
+
+function loadPayInfo() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PAY_INFO_KEY)) || {};
+    return { alipayAccount: saved.alipayAccount || '', alipayName: saved.alipayName || '' };
+  } catch {
+    return { alipayAccount: '', alipayName: '' };
+  }
+}
+
+const payInfo = reactive(loadPayInfo());
+
+function savePayInfo() {
+  localStorage.setItem(PAY_INFO_KEY, JSON.stringify({ ...payInfo }));
+}
+
+/* ================= 当天提交次数（后端未下发，本地按天计数） ================= */
+function todayKey() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+const submittedToday = ref(
+  Number(localStorage.getItem(`club_wallet_withdraw_count_${todayKey()}`)) || 0,
+);
+
+const remainTimes = computed(() =>
+  Math.max(0, WITHDRAW_RULES.dailyMaxTimes - submittedToday.value),
+);
+
+function markSubmitted() {
+  submittedToday.value += 1;
+  localStorage.setItem(`club_wallet_withdraw_count_${todayKey()}`, String(submittedToday.value));
+}
+
+/* ================= 钱包明细（服务端分页，walletType 服务端筛选） ================= */
+const filter = reactive({ walletType: '' });
+const WALLET_TYPE_OPTIONS = [
   { label: '全部', value: '' },
-  ...FLOW_TYPE_OPTIONS,
-]);
+  { label: '收益', value: 'INCOME' },
+  { label: '押金', value: 'DEPOSIT' },
+];
 
-/* ================= 钱包明细表格 ================= */
-const allRows = ref(buildFlowRows(658));
+const txns = ref([]);
+const total = ref(0);
+const page = ref(1);
+const pageSize = ref(10);
+const loadingTxns = ref(false);
+
 const columns = [
   { key: 'typeText', title: '类型' },
   { key: 'amount', title: '金额(元)' },
@@ -42,40 +96,55 @@ const columns = [
   { key: 'time', title: '时间' },
 ];
 
-const page = ref(1);
-const pageSize = ref(10);
+/** 后端流水字段 → 表格字段映射（bizType 优先走原型文案映射，未知值原样展示） */
+function mapTxn(t = {}) {
+  return {
+    id: t.id,
+    typeText: FLOW_TYPE_TEXT[t.bizType] || t.bizType || '',
+    amount: Number(t.amount) || 0,
+    relationNo: t.orderNo || '',
+    reason: t.reason || '',
+    time: t.createdAt || '',
+  };
+}
 
-const filteredRows = computed(() =>
-  allRows.value.filter((row) => {
-    const typeMatch = !filter.type || row.type === filter.type;
-    let timeMatch = true;
-    if (filter.startTime) {
-      const start = new Date(`${filter.startTime} 00:00:00`.replace(/-/g, '/')).getTime();
-      if (new Date(row.time.replace(/-/g, '/')).getTime() < start) timeMatch = false;
+async function loadTxns() {
+  loadingTxns.value = true;
+  try {
+    const data = await walletApi.txns({
+      walletType: filter.walletType,
+      page: page.value,
+      pageSize: pageSize.value,
+    });
+    total.value = Number(data?.total) || 0;
+    txns.value = Array.isArray(data?.list) ? data.list.map(mapTxn) : [];
+    // 当前页被删空时回退到第 1 页
+    if (txns.value.length === 0 && page.value > 1) {
+      page.value = 1;
+      await loadTxns();
+      return;
     }
-    if (filter.endTime) {
-      const end = new Date(`${filter.endTime} 23:59:59`.replace(/-/g, '/')).getTime();
-      if (new Date(row.time.replace(/-/g, '/')).getTime() > end) timeMatch = false;
-    }
-    return typeMatch && timeMatch;
-  }),
-);
-
-const total = computed(() => filteredRows.value.length);
-const rows = computed(() => {
-  const start = (page.value - 1) * pageSize.value;
-  return filteredRows.value.slice(start, start + pageSize.value);
-});
+  } catch {
+    txns.value = [];
+    total.value = 0;
+  } finally {
+    loadingTxns.value = false;
+  }
+}
 
 function handleSearch() {
   page.value = 1;
+  loadTxns();
 }
 
 function handleReset() {
-  filter.type = '';
-  filter.startTime = '';
-  filter.endTime = '';
-  page.value = 1;
+  filter.walletType = '';
+  handleSearch();
+}
+
+function handlePageChange(p) {
+  page.value = p;
+  loadTxns();
 }
 
 function formatAmount(val) {
@@ -83,14 +152,11 @@ function formatAmount(val) {
   return `${num > 0 ? '+' : ''}${num.toFixed(2)}`;
 }
 
-/* ================= 提现弹窗 ================= */
+/* ================= 提现弹窗（POST /api/club/wallets/withdraw） ================= */
 const withdrawVisible = ref(false);
 const withdrawForm = reactive({ amount: '' });
-
-// 当天剩余可提交次数
-const remainTimes = computed(() =>
-  Math.max(0, WITHDRAW_RULES.dailyMaxTimes - account.submittedToday),
-);
+const submitting = ref(false);
+const lastRequestId = ref('');
 
 function openWithdrawModal() {
   withdrawForm.amount = '';
@@ -98,7 +164,7 @@ function openWithdrawModal() {
 }
 
 function fillAllAmount() {
-  withdrawForm.amount = Number(account.withdrawableBalance).toFixed(2);
+  withdrawForm.amount = withdrawableBalance.value.toFixed(2);
 }
 
 // 当前是否在可提现时间段内
@@ -119,8 +185,13 @@ function showError(msg) {
 const confirmVisible = ref(false);
 
 function handleSubmitWithdraw() {
+  // 0. 收款信息完整性
+  if (!payInfo.alipayAccount.trim() || !payInfo.alipayName.trim()) {
+    showError('请先完善支付宝账号与实名信息');
+    return;
+  }
   // 1. 钱包冻结
-  if (account.walletFrozen) {
+  if (wallet.walletFrozen) {
     showError('您的钱包已冻结，请联系客服咨询');
     return;
   }
@@ -148,7 +219,7 @@ function handleSubmitWithdraw() {
     showError('提现金额需≥90元');
     return;
   }
-  if (amt > Number(account.withdrawableBalance)) {
+  if (amt > withdrawableBalance.value) {
     show('提现金额不能超过可提现余额', 'warning');
     return;
   }
@@ -156,21 +227,69 @@ function handleSubmitWithdraw() {
   confirmVisible.value = true;
 }
 
-function confirmWithdraw() {
-  const amt = Number(withdrawForm.amount);
-  account.withdrawableBalance = Number((account.withdrawableBalance - amt).toFixed(2));
-  account.submittedToday += 1;
-  confirmVisible.value = false;
-  withdrawVisible.value = false;
-  show('提现申请已提交', 'success');
+/** 幂等单号：时间戳 + 随机数 */
+function generateRequestId() {
+  return `W${Date.now()}${String(Math.floor(Math.random() * 100000)).padStart(5, '0')}`;
 }
 
-/* ---- 编辑支付宝账号弹窗 ---- */
+async function confirmWithdraw() {
+  if (submitting.value) return;
+  submitting.value = true;
+  try {
+    lastRequestId.value = generateRequestId();
+    const res = await walletApi.withdraw({
+      walletType: 'INCOME',
+      amount: Number(withdrawForm.amount),
+      alipayAccount: payInfo.alipayAccount.trim(),
+      alipayName: payInfo.alipayName.trim(),
+      requestId: lastRequestId.value,
+    });
+    const status = res?.status;
+    confirmVisible.value = false;
+    withdrawVisible.value = false;
+
+    if (status === 'FAIL') {
+      showError('提现失败，请联系客服或稍后重试');
+    } else {
+      show(status === 'SUCCESS' ? '提现成功' : '提现申请已提交，请等待到账', 'success');
+      markSubmitted();
+    }
+    await loadWallet();
+    await loadTxns();
+    // 异步处理中：稍后回查一次提现单状态
+    if (status === 'PROCESSING') {
+      setTimeout(queryWithdrawalResult, 3000);
+    }
+  } catch {
+    // 后端校验错误（金额/次数/冻结等）已由 request.js 统一 toast
+  } finally {
+    submitting.value = false;
+  }
+}
+
+/* ---- 提现单状态回查（GET /api/club/wallets/withdrawals） ---- */
+async function queryWithdrawalResult() {
+  if (!lastRequestId.value) return;
+  try {
+    const order = await walletApi.withdrawalStatus(lastRequestId.value);
+    const status = order?.status;
+    if (status === 'FAIL') {
+      showError(`提现失败：${order.failReason || '未知原因'}`);
+    } else if (status === 'SUCCESS') {
+      show('提现成功，款项已转出', 'success');
+    }
+  } catch {
+    // 查询失败不打扰用户，可手动刷新
+  }
+}
+
+/* ---- 编辑收款信息弹窗（账号 + 实名） ---- */
 const alipayEditVisible = ref(false);
-const alipayEditForm = reactive({ account: '' });
+const alipayEditForm = reactive({ account: '', name: '' });
 
 function openAlipayEdit() {
-  alipayEditForm.account = account.alipayAccount;
+  alipayEditForm.account = payInfo.alipayAccount;
+  alipayEditForm.name = payInfo.alipayName;
   alipayEditVisible.value = true;
 }
 
@@ -179,18 +298,29 @@ function saveAlipay() {
     show('请输入支付宝账号', 'warning');
     return;
   }
-  account.alipayAccount = alipayEditForm.account.trim();
+  if (!alipayEditForm.name.trim()) {
+    show('请输入支付宝实名', 'warning');
+    return;
+  }
+  payInfo.alipayAccount = alipayEditForm.account.trim();
+  payInfo.alipayName = alipayEditForm.name.trim();
+  savePayInfo();
   alipayEditVisible.value = false;
-  show('支付宝账号已更新', 'success');
+  show('收款信息已更新', 'success');
 }
+
+onMounted(() => {
+  loadWallet();
+  loadTxns();
+});
 </script>
 
 <template>
   <div class="my-wallet-page">
     <!-- ===== 顶部：可提现余额卡片 ===== -->
-    <div class="balance-card">
+    <div class="balance-card" v-loading="loadingWallet">
       <p class="balance-label">可提现余额</p>
-      <p class="balance-value">¥{{ Number(account.withdrawableBalance).toFixed(2) }}</p>
+      <p class="balance-value">¥{{ withdrawableBalance.toFixed(2) }}</p>
       <button type="button" class="withdraw-entry-btn" @click="openWithdrawModal">提现</button>
     </div>
 
@@ -202,56 +332,38 @@ function saveAlipay() {
       <div class="filter-row">
         <div class="filter-item">
           <label class="filter-label">类型</label>
-          <el-select v-model="filter.type" placeholder="请选择" style="width: 180px" @change="handleSearch">
-            <el-option v-for="opt in typeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          <el-select v-model="filter.walletType" placeholder="请选择" style="width: 180px" @change="handleSearch">
+            <el-option v-for="opt in WALLET_TYPE_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
         </div>
-        <div class="filter-item">
-          <label class="filter-label">时间</label>
-          <el-date-picker
-            v-model="filter.startTime"
-            type="date"
-            placeholder="开始时间"
-            value-format="YYYY-MM-DD"
-            style="width: 160px"
-            @change="handleSearch"
-          />
-          <span class="time-sep">—</span>
-          <el-date-picker
-            v-model="filter.endTime"
-            type="date"
-            placeholder="结束时间"
-            value-format="YYYY-MM-DD"
-            style="width: 160px"
-            @change="handleSearch"
-          />
-          <el-button class="filter-reset-btn" @click="handleReset">重置</el-button>
-        </div>
+        <el-button class="filter-reset-btn" @click="handleReset">重置</el-button>
       </div>
 
       <!-- 明细表格 -->
-      <DataTable
-        :columns="columns"
-        :data="rows"
-        :total="total"
-        :page="page"
-        :page-size="pageSize"
-        @page-change="(p) => (page = p)"
-      >
-        <template #cell-amount="{ row }">
-          <span :class="['amount-text', row.amount >= 0 ? 'amount-in' : 'amount-out']">
-            {{ formatAmount(row.amount) }}
-          </span>
-        </template>
-        <template #cell-relationNo="{ row }">
-          <a v-if="row.relationNo" class="relation-link">{{ row.relationNo }}</a>
-          <span v-else class="muted-text">—</span>
-        </template>
-        <template #cell-reason="{ row }">
-          <span v-if="row.reason">{{ row.reason }}</span>
-          <span v-else class="muted-text">—</span>
-        </template>
-      </DataTable>
+      <div v-loading="loadingTxns">
+        <DataTable
+          :columns="columns"
+          :data="txns"
+          :total="total"
+          :page="page"
+          :page-size="pageSize"
+          @page-change="handlePageChange"
+        >
+          <template #cell-amount="{ row }">
+            <span :class="['amount-text', row.amount >= 0 ? 'amount-in' : 'amount-out']">
+              {{ formatAmount(row.amount) }}
+            </span>
+          </template>
+          <template #cell-relationNo="{ row }">
+            <a v-if="row.relationNo" class="relation-link">{{ row.relationNo }}</a>
+            <span v-else class="muted-text">—</span>
+          </template>
+          <template #cell-reason="{ row }">
+            <span v-if="row.reason">{{ row.reason }}</span>
+            <span v-else class="muted-text">—</span>
+          </template>
+        </DataTable>
+      </div>
     </div>
 
     <!-- ===== 提现弹窗 ===== -->
@@ -260,7 +372,7 @@ function saveAlipay() {
         <!-- 支付宝账号 -->
         <div class="form-row">
           <span class="form-label">支付宝账号：</span>
-          <span class="form-value">{{ account.alipayAccount }}</span>
+          <span class="form-value">{{ payInfo.alipayAccount }}</span>
           <a class="edit-link" @click="openAlipayEdit">编辑&gt;</a>
         </div>
 
@@ -276,7 +388,7 @@ function saveAlipay() {
 
         <!-- 可提现余额 / 当日剩余次数 -->
         <div class="form-row sub-row">
-          <span class="sub-text">可提现余额：¥{{ Number(account.withdrawableBalance).toFixed(2) }}</span>
+          <span class="sub-text">可提现余额：¥{{ withdrawableBalance.toFixed(2) }}</span>
         </div>
         <div class="form-row sub-row">
           <span class="sub-text">当天剩余提交次数：{{ remainTimes }}次</span>
@@ -292,20 +404,24 @@ function saveAlipay() {
           </ol>
         </div>
 
-        <button type="button" class="submit-btn" @click="handleSubmitWithdraw">提现</button>
+        <button type="button" class="submit-btn" :disabled="submitting" @click="handleSubmitWithdraw">
+          {{ submitting ? '提交中...' : '提现' }}
+        </button>
       </div>
     </AppModal>
 
     <!-- ===== 二次确认弹窗 ===== -->
     <AppModal v-model="confirmVisible" title="提现确认" width="380px">
       <div class="confirm-box">
-        <div class="confirm-row"><span class="confirm-label">支付宝账号</span><span>{{ account.alipayAccount }}</span></div>
-        <div class="confirm-row"><span class="confirm-label">姓名</span><span>{{ account.alipayName }}</span></div>
+        <div class="confirm-row"><span class="confirm-label">支付宝账号</span><span>{{ payInfo.alipayAccount }}</span></div>
+        <div class="confirm-row"><span class="confirm-label">姓名</span><span>{{ payInfo.alipayName }}</span></div>
         <div class="confirm-row"><span class="confirm-label">提现金额</span><span class="confirm-amount">¥{{ Number(withdrawForm.amount || 0).toFixed(2) }}</span></div>
       </div>
       <template #footer>
         <button class="btn btn-plain" type="button" @click="confirmVisible = false">取消</button>
-        <button class="btn btn-primary" type="button" @click="confirmWithdraw">确定提现</button>
+        <button class="btn btn-primary" type="button" :disabled="submitting" @click="confirmWithdraw">
+          {{ submitting ? '提交中...' : '确定提现' }}
+        </button>
       </template>
     </AppModal>
 
@@ -317,9 +433,18 @@ function saveAlipay() {
       </template>
     </AppModal>
 
-    <!-- ===== 编辑支付宝账号弹窗 ===== -->
-    <AppModal v-model="alipayEditVisible" title="编辑支付宝账号" width="360px">
-      <el-input v-model="alipayEditForm.account" placeholder="请输入支付宝账号" />
+    <!-- ===== 编辑收款信息弹窗 ===== -->
+    <AppModal v-model="alipayEditVisible" title="编辑收款信息" width="360px">
+      <div class="pay-form">
+        <div class="form-row form-row-block">
+          <span class="form-label">支付宝账号</span>
+          <el-input v-model="alipayEditForm.account" placeholder="请输入支付宝账号" />
+        </div>
+        <div class="form-row form-row-block">
+          <span class="form-label">支付宝实名</span>
+          <el-input v-model="alipayEditForm.name" placeholder="请输入支付宝实名（与账号一致）" />
+        </div>
+      </div>
       <template #footer>
         <button class="btn btn-plain" type="button" @click="alipayEditVisible = false">取消</button>
         <button class="btn btn-primary" type="button" @click="saveAlipay">保存</button>
@@ -407,10 +532,6 @@ function saveAlipay() {
 .filter-label {
   font-size: 13px;
   color: var(--text-main);
-}
-
-.time-sep {
-  color: var(--text-sub);
 }
 
 .filter-reset-btn {
@@ -537,6 +658,7 @@ function saveAlipay() {
 }
 
 .submit-btn:hover { filter: brightness(1.06); }
+.submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* ===== 二次确认弹窗 ===== */
 .confirm-box {
@@ -570,6 +692,13 @@ function saveAlipay() {
   line-height: 1.7;
 }
 
+/* ===== 编辑收款信息弹窗 ===== */
+.pay-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 /* ===== 通用按钮（弹窗 footer） ===== */
 .btn {
   border: none;
@@ -586,6 +715,7 @@ function saveAlipay() {
 }
 
 .btn-primary:hover { filter: brightness(1.06); }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .btn-plain {
   background: var(--bg-hover);

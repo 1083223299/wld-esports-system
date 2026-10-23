@@ -9,6 +9,7 @@ import {
   buildDemoMessages,
   makeMessage,
 } from '../api/notifySocket';
+import { notifyApi } from '../api/modules/notify';
 import { resolveNotifyTarget } from '../utils/notifyJump';
 import { playNotifySound } from '../utils/notifySound';
 import { showBrowserNotify } from '../utils/browserNotify';
@@ -47,6 +48,63 @@ function normalize(raw) {
     mentions: Array.isArray(src.mentions) ? src.mentions : [],
     time: src.time || formatTime(),
     read: !!src.read,
+  };
+}
+
+/* ================= 后端接口字段映射（09-通知 / 消息通知） ================= */
+
+/** 仅后端返回的整数通知 id 才调用已读接口（本地 mock 演示 id 为字符串，跳过） */
+function isBackendId(id) {
+  return typeof id === 'number' || /^\d+$/.test(String(id));
+}
+
+/**
+ * 后端 scene → 前端通知类型（TYPE_META 标签 / notifyJump 跳转规则共用）
+ * 精确映射优先（TAKE_TIMEOUT 为接口文档示例，其余按需求图命名推断，后端补充后可在此扩展）；
+ * 命名变体走关键词兜底；未知场景回退系统通知
+ */
+function sceneToType(scene) {
+  const EXACT = {
+    TAKE_TIMEOUT: NOTIFY_TYPE.ORDER_TIMEOUT, // 俱乐部抢单后超时
+    DISPATCH: NOTIFY_TYPE.ORDER_DISPATCH, // 平台派单/转单
+    ORDER_DISPATCH: NOTIFY_TYPE.ORDER_DISPATCH,
+    ORDER_CLOSED: NOTIFY_TYPE.ORDER_CLOSED, // 订单交易关闭
+    TRADE_CLOSED: NOTIFY_TYPE.ORDER_CLOSED,
+    WALLET_DEDUCT: NOTIFY_TYPE.WALLET_DEDUCT, // 转单扣款
+    TRANSFER_DEDUCT: NOTIFY_TYPE.WALLET_DEDUCT,
+    WITHDRAW_FAIL: NOTIFY_TYPE.WITHDRAW_FAIL, // 收益提现失败
+    DEPOSIT_WITHDRAW_FAIL: NOTIFY_TYPE.DEPOSIT_WITHDRAW_FAIL, // 押金提现失败
+    STUCK: NOTIFY_TYPE.STUCK, // 卡单预警
+  };
+  if (EXACT[scene]) return EXACT[scene];
+
+  const s = String(scene).toLowerCase();
+  if (s.includes('stuck')) return NOTIFY_TYPE.STUCK;
+  if (s.includes('timeout')) return NOTIFY_TYPE.ORDER_TIMEOUT;
+  if (s.includes('dispatch') || s.includes('transfer')) return NOTIFY_TYPE.ORDER_DISPATCH;
+  if (s.includes('close') || s.includes('cancel')) return NOTIFY_TYPE.ORDER_CLOSED;
+  if (s.includes('deduct')) return NOTIFY_TYPE.WALLET_DEDUCT;
+  if (s.includes('deposit')) return NOTIFY_TYPE.DEPOSIT_WITHDRAW_FAIL;
+  if (s.includes('withdraw')) return NOTIFY_TYPE.WITHDRAW_FAIL;
+  return NOTIFY_TYPE.SYSTEM;
+}
+
+/**
+ * 后端通知字段 → 列表项
+ * 后端：{ id, scene, title, content, bizKey, readFlag(0/1), createdAt }
+ * 列表：{ id, type, title, content, orderNos, mentions, time, read }
+ */
+function mapApiItem(src) {
+  if (!src || typeof src !== 'object' || src.id == null) return null;
+  return {
+    id: src.id,
+    type: sceneToType(String(src.scene || '')),
+    title: src.title || '系统通知',
+    content: src.content || '',
+    orderNos: src.bizKey ? [String(src.bizKey)] : [],
+    mentions: [],
+    time: src.createdAt || formatTime(),
+    read: Number(src.readFlag) === 1,
   };
 }
 
@@ -172,19 +230,32 @@ export const useNotifyStore = defineStore('notify', {
       });
     },
 
-    /** 标记单条已读 */
+    /** 标记单条已读（本地立即生效；后端整数 id 同步调用已读接口，失败已由 request.js toast） */
     markRead(id) {
       const item = this.items.find((i) => i.id === id);
       if (item) item.read = true;
       this.syncBadge();
+      if (isBackendId(id)) {
+        notifyApi.markRead(id).catch(() => {});
+      }
     },
 
-    /** 全部标记已读，并清除标签页角标 */
-    markAllRead() {
+    /** 全部标记已读，并清除标签页角标（逐个调用后端已读接口） */
+    async markAllRead() {
+      const ids = this.items
+        .filter((i) => !i.read && isBackendId(i.id))
+        .map((i) => i.id);
       this.items.forEach((i) => {
         i.read = true;
       });
       this.syncBadge();
+      if (ids.length) {
+        try {
+          await Promise.all(ids.map((id) => notifyApi.markRead(id)));
+        } catch {
+          /* request.js 已 toast，不重复提示 */
+        }
+      }
     },
 
     /** 关闭指定气泡 */
@@ -201,6 +272,24 @@ export const useNotifyStore = defineStore('notify', {
     /** 同步标签页 favicon 未读角标 */
     syncBadge() {
       setFaviconBadge(this.unreadCount);
+    },
+
+    /**
+     * 从后端加载我的通知（俱乐部）列表（GET /api/club/notifications）
+     * 后端字段 scene/bizKey/readFlag/createdAt 在此映射为列表项并替换本地列表；
+     * 失败时保留现有列表（本地演示/缓存数据），错误提示已由 request.js 统一 toast
+     */
+    async loadFromApi() {
+      try {
+        const list = await notifyApi.list();
+        if (Array.isArray(list)) {
+          this.items = list.map(mapApiItem).filter(Boolean);
+          this.syncBadge();
+        }
+      } catch {
+        /* 保留现有列表，不打断页面 */
+      }
+      return this.items;
     },
 
     /**

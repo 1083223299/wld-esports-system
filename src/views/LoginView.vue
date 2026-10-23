@@ -71,7 +71,7 @@ async function submit() {
     const redirect = route.query.redirect || '/home';
     router.replace(String(redirect));
   } catch (error) {
-    show(error?.message || '登录失败', 'error');
+    // 错误提示由 request.js 统一 toast（直接展示后端返回的 message，如"账号或密码错误"）
   } finally {
     loading.value = false;
   }

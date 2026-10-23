@@ -1,18 +1,30 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useToast } from '../../../composables/useToast';
 import { clubConfigApi } from '../../../api/modules/clubConfig';
 import PaginationSimple from '../../../components/PaginationSimple/index.vue';
 
+/**
+ * 配置管理 > 俱乐部配置（真实接口联调）
+ * - GET  /api/club/settings   俱乐部配置 → { publicGrab }
+ * - PUT  /api/club/settings   保存俱乐部配置 → { publicGrab }
+ * - GET  /api/club/specs/mine 本俱乐部规格 → { specs, clubSpecs }
+ *
+ * 字段映射：
+ * - publicGrab=1（公开抢单）  ↔ orderMode='public'（可直接接公共订单）
+ * - publicGrab=0（俱乐部先接）↔ orderMode='club_first'（必须先由俱乐部接单）
+ * - 切换接单模式即自动保存（配置实时生效），失败由 request.js 统一 toast
+ *
+ * 规格名称预留：接口仅返回 gameId / specIds，暂无游戏·规格目录接口，
+ * 表格暂以原始 ID 展示；接入目录接口后可在 specText 补充名称解析。
+ */
 const { show } = useToast();
 
-// ============ 配置数据 ============
+// ============ 俱乐部配置 ============
 const loading = ref(false);
-const submitting = ref(false);
+const saving = ref(false);
 const form = reactive({
-  orderMode: 'public', // public | club_first
-  profitMode: 'percent', // percent | fixed
-  playerPercent: 40, // 0<=值<100 整数
+  orderMode: 'public', // public=公开抢单(publicGrab:1) | club_first=俱乐部先接单(publicGrab:0)
 });
 
 const orderModeOptions = [
@@ -20,192 +32,82 @@ const orderModeOptions = [
   { value: 'club_first', label: '必须先由俱乐部接单，打手仅可接俱乐部接手的订单', desc: '订单先流转至俱乐部，再由俱乐部指派' },
 ];
 
-// 俱乐部分润 = 100 - 打手分润
-const clubPercent = computed(() => {
-  const v = Number(form.playerPercent);
-  if (form.playerPercent === '' || Number.isNaN(v)) return '--';
-  return Math.max(0, 100 - v);
-});
-
-// ============ 游戏规格列表（固定值分润） ============
-const skuLoading = ref(false);
-const saveAllLoading = ref(false);
-const skuList = ref([]);
-const total = ref(0);
-const currentPage = ref(1);
-const pageSize = ref(10);
-const keyword = ref('');
-let searchTimer = null;
+function mapPublicGrab(v) {
+  return Number(v) === 1 ? 'public' : 'club_first';
+}
 
 async function fetchConfig() {
   loading.value = true;
   try {
     const res = await clubConfigApi.get();
-    form.orderMode = res.orderMode;
-    form.profitMode = res.profitMode;
-    form.playerPercent = res.playerPercent;
+    form.orderMode = mapPublicGrab(res?.publicGrab);
+  } catch {
+    // 错误提示已由 request.js 统一 toast
   } finally {
     loading.value = false;
   }
 }
 
-async function fetchSkuList() {
-  skuLoading.value = true;
-  try {
-    const res = await clubConfigApi.listGameSkus({
-      page: currentPage.value,
-      pageSize: pageSize.value,
-      keyword: keyword.value,
-    });
-    total.value = res.total;
-    skuList.value = res.list;
-  } finally {
-    skuLoading.value = false;
-  }
-}
-
-// 搜索：防抖 300ms，命中后回到第 1 页
-function onSearchInput() {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    currentPage.value = 1;
-    fetchSkuList();
-  }, 300);
-}
-
-watch(
-  () => form.profitMode,
-  (val) => {
-    if (val === 'fixed' && skuList.value.length === 0) {
-      fetchSkuList();
-    }
-  }
-);
-
-// ============ 百分比输入 ============
-function onPercentInput(e) {
-  let v = e.target.value;
-  v = v.replace(/\D/g, '');
-  v = v.replace(/^0+(\d)/, '$1');
-  if (v !== '' && Number(v) >= 100) v = '99';
-  form.playerPercent = v === '' ? '' : Number(v);
-}
-
-// ============ 固定值输入 ============
-function onAmountInput(row, e) {
-  let v = e.target.value;
-  v = v.replace(/[^\d.]/g, '');
-  const firstDot = v.indexOf('.');
-  if (firstDot !== -1) {
-    v = v.slice(0, firstDot + 1) + v.slice(firstDot + 1).replace(/\./g, '');
-  }
-  if (v.includes('.')) {
-    const [int, dec] = v.split('.');
-    v = `${int}.${dec.slice(0, 2)}`;
-  }
-  row.amount = v;
-}
-
-async function onAmountBlur(row) {
-  const raw = row.amount;
-  if (raw === '' || raw === null || raw === undefined) {
-    row.amount = null;
-    try {
-      await clubConfigApi.saveSkuAmount({ id: row.id, amount: null });
-    } catch (e) {
-      show(e?.message || '保存失败', 'error');
-    }
-    return;
-  }
-  const v = Number(raw);
-  if (Number.isNaN(v) || v < 0) {
-    show('仅支持输入 0 及正数', 'warning');
-    return;
-  }
-  try {
-    await clubConfigApi.saveSkuAmount({ id: row.id, amount: v });
-    show('已保存', 'success');
-  } catch (e) {
-    show(e?.message || '保存失败', 'error');
-  }
-}
-
-// 右上角保存：批量保存当前页全部规格金额
-async function handleSaveAll() {
-  saveAllLoading.value = true;
-  try {
-    await Promise.all(
-      skuList.value.map((row) => {
-        const amount =
-          row.amount === '' || row.amount === null || row.amount === undefined
-            ? null
-            : Number(row.amount);
-        if (amount !== null && (Number.isNaN(amount) || amount < 0)) {
-          return Promise.reject(new Error(`「${row.gameName}·${row.specName}」金额仅支持 0 及正数`));
-        }
-        return clubConfigApi.saveSkuAmount({ id: row.id, amount });
-      })
-    );
-    show('保存成功', 'success');
-  } catch (e) {
-    show(e?.message || '保存失败', 'error');
-  } finally {
-    saveAllLoading.value = false;
-  }
-}
-
-// ============ 提交（百分比模式） ============
-function validatePercent() {
-  const v = Number(form.playerPercent);
-  if (form.playerPercent === '' || Number.isNaN(v)) return '请输入打手分润比例';
-  if (!Number.isInteger(v)) return '打手分润仅支持整数';
-  if (v < 0 || v >= 100) return '打手分润需满足 0 ≤ 值 < 100';
-  return null;
-}
-
-async function handleSubmit() {
-  const err = validatePercent();
-  if (err) {
-    show(err, 'warning');
-    return;
-  }
-  submitting.value = true;
-  try {
-    await clubConfigApi.save({
-      orderMode: form.orderMode,
-      profitMode: form.profitMode,
-      playerPercent: Number(form.playerPercent),
-    });
-    show('保存成功', 'success');
-  } catch (e) {
-    show(e?.message || '保存失败', 'error');
-  } finally {
-    submitting.value = false;
-  }
-}
-
+// 切换接单模式即保存（配置实时生效）
 async function onModeChange() {
-  if (form.profitMode === 'percent') {
-    const err = validatePercent();
-    if (err) return;
-  }
+  if (saving.value) return;
+  saving.value = true;
   try {
-    await clubConfigApi.save({
-      orderMode: form.orderMode,
-      profitMode: form.profitMode,
-      playerPercent: Number(form.playerPercent) || 0,
-    });
-  } catch (e) {
-    // 静默
+    await clubConfigApi.save({ publicGrab: form.orderMode === 'public' ? 1 : 0 });
+    show('配置已保存', 'success');
+  } catch {
+    // 后端错误已由 request.js toast
+  } finally {
+    saving.value = false;
   }
 }
+
+// ============ 本俱乐部可接规格 ============
+const specsLoading = ref(false);
+const specGroups = ref([]); // [{ source: '本账号'|'所属俱乐部', gameId, all, specIds }]
+const page = ref(1);
+const pageSize = ref(10);
+
+async function fetchMySpecs() {
+  specsLoading.value = true;
+  try {
+    const res = await clubConfigApi.getMySpecs();
+    const rows = [];
+    (Array.isArray(res?.specs) ? res.specs : []).forEach((it) =>
+      rows.push({ ...it, source: '本账号' })
+    );
+    (Array.isArray(res?.clubSpecs) ? res.clubSpecs : []).forEach((it) =>
+      rows.push({ ...it, source: '所属俱乐部' })
+    );
+    specGroups.value = rows;
+    page.value = 1;
+  } catch {
+    specGroups.value = [];
+  } finally {
+    specsLoading.value = false;
+  }
+}
+
+// all=true 或 specIds 为空均表示该游戏全部规格可接
+function specText(row) {
+  if (row.all || !Array.isArray(row.specIds) || !row.specIds.length) return '全部规格';
+  return row.specIds.join(' / ');
+}
+
+const rows = computed(() => {
+  const start = (page.value - 1) * pageSize.value;
+  return specGroups.value.slice(start, start + pageSize.value);
+});
+const total = computed(() => specGroups.value.length);
 
 function handlePageChange(p) {
-  currentPage.value = p;
-  fetchSkuList();
+  page.value = p;
 }
 
-onMounted(fetchConfig);
+onMounted(() => {
+  fetchConfig();
+  fetchMySpecs();
+});
 </script>
 
 <template>
@@ -218,21 +120,12 @@ onMounted(fetchConfig);
           <div class="card-header">
               <div class="header-text">
                 <h2>俱乐部配置</h2>
-                <!-- <p>统一管理打手接单规则与分润策略</p> -->
               </div>
               <div class="header-actions">
                 <span class="header-badge">
                   <span class="dot"></span>
                   配置实时生效
                 </span>
-                <button
-                  v-if="form.profitMode === 'fixed'"
-                  class="btn btn-primary btn-save"
-                  :disabled="saveAllLoading"
-                  @click="handleSaveAll"
-                >
-                  {{ saveAllLoading ? '保存中...' : '保存' }}
-                </button>
               </div>
             </div>
 
@@ -277,73 +170,17 @@ onMounted(fetchConfig);
               </div>
             </div>
 
-            <!-- 打手分润设置 -->
+            <!-- 本俱乐部可接规格 -->
             <div class="section section-flex">
               <div class="section-title">
                 <span class="title-bar"></span>
-                打手分润设置
+                本俱乐部可接规格
               </div>
 
-              <div class="profit-options">
-                <label class="profit-radio" :class="{ active: form.profitMode === 'percent' }">
-                  <input v-model="form.profitMode" type="radio" name="profitMode" value="percent" @change="onModeChange" />
-                  <span>百分比分润</span>
-                </label>
-                <label class="profit-radio" :class="{ active: form.profitMode === 'fixed' }">
-                  <input v-model="form.profitMode" type="radio" name="profitMode" value="fixed" @change="onModeChange" />
-                  <span>按游戏规格进行固定值分润</span>
-                </label>
-              </div>
-
-              <!-- 百分比分润 -->
-              <div v-if="form.profitMode === 'percent'" class="percent-panel">
-                <div class="percent-row">
-                  <label class="percent-label">打手分润</label>
-                  <div class="percent-field">
-                    <input
-                      :value="form.playerPercent"
-                      type="text"
-                      inputmode="numeric"
-                      placeholder="请输入整数"
-                      @input="onPercentInput"
-                    />
-                    <span class="unit">%</span>
-                  </div>
-                </div>
-                <div class="percent-row">
-                  <label class="percent-label">俱乐部分润</label>
-                  <div class="percent-field">
-                    <span class="readonly-value">{{ clubPercent }}%</span>
-                  </div>
-                </div>
-                <div class="percent-footer">
-                  <button class="btn btn-primary" :disabled="submitting" @click="handleSubmit">
-                    {{ submitting ? '提交中...' : '提交配置' }}
-                  </button>
-                </div>
-              </div>
-
-              <!-- 固定值分润 -->
-              <div v-else class="fixed-panel">
+              <div class="fixed-panel">
                 <div class="table-toolbar">
                   <span class="toolbar-title">游戏规格</span>
-                  <div class="toolbar-search">
-                    <svg class="search-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-                      <path
-                        d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm10 16l-4.3-4.3"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        fill="none"
-                      />
-                    </svg>
-                    <input
-                      v-model="keyword"
-                      type="text"
-                      placeholder="搜索游戏名称 / 游戏规格"
-                      @input="onSearchInput"
-                    />
-                  </div>
+                  <span class="toolbar-hint">来源：本俱乐部规格接口</span>
                 </div>
 
                 <div class="table-wrap">
@@ -351,39 +188,31 @@ onMounted(fetchConfig);
                     <thead>
                       <tr>
                         <th class="col-index">#</th>
-                        <th class="col-game">游戏名称</th>
-                        <th class="col-spec">游戏规格</th>
-                        <th class="col-amount">打手到手金额 (元)</th>
+                        <th class="col-source">来源</th>
+                        <th class="col-game">游戏 ID</th>
+                        <th class="col-spec">可接规格</th>
                       </tr>
                     </thead>
-                    <tbody v-if="skuLoading">
+                    <tbody v-if="specsLoading">
                       <tr>
                         <td colspan="4" class="empty-cell">加载中...</td>
                       </tr>
                     </tbody>
                     <tbody v-else>
-                      <tr v-for="(row, idx) in skuList" :key="row.id" :class="{ unset: row.amount === null }">
-                        <td class="col-index">{{ (currentPage - 1) * pageSize + idx + 1 }}</td>
+                      <tr v-for="(row, idx) in rows" :key="`${row.source}-${row.gameId}`">
+                        <td class="col-index">{{ (page - 1) * pageSize + idx + 1 }}</td>
+                        <td class="col-source">
+                          <span class="game-tag" :class="{ 'club-tag': row.source === '所属俱乐部' }">
+                            {{ row.source }}
+                          </span>
+                        </td>
                         <td class="col-game">
-                          <span class="game-tag">{{ row.gameName }}</span>
+                          <span class="game-id">#{{ row.gameId }}</span>
                         </td>
-                        <td class="col-spec">{{ row.specName }}</td>
-                        <td class="col-amount">
-                          <div class="amount-wrap">
-                            <input
-                              :value="row.amount ?? ''"
-                              type="text"
-                              inputmode="decimal"
-                              placeholder="未配置"
-                              @input="onAmountInput(row, $event)"
-                              @blur="onAmountBlur(row)"
-                            />
-                            <span v-if="row.amount === null" class="unset-badge">待配置</span>
-                          </div>
-                        </td>
+                        <td class="col-spec">{{ specText(row) }}</td>
                       </tr>
-                      <tr v-if="!skuList.length">
-                        <td colspan="4" class="empty-cell">未找到相关游戏规格</td>
+                      <tr v-if="!rows.length">
+                        <td colspan="4" class="empty-cell">暂无规格数据</td>
                       </tr>
                     </tbody>
                   </table>
@@ -391,7 +220,7 @@ onMounted(fetchConfig);
 
                 <div class="pagination-bar">
                   <PaginationSimple
-                    :current-page="currentPage"
+                    :current-page="page"
                     :page-size="pageSize"
                     :total="total"
                     :show-batch-actions="false"
@@ -446,12 +275,6 @@ onMounted(fetchConfig);
   font-weight: 700;
   color: var(--text-main);
   letter-spacing: 0.2px;
-}
-
-.header-text p {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-sub);
 }
 
 .header-actions {
@@ -561,11 +384,6 @@ onMounted(fetchConfig);
   margin-bottom: 4px;
 }
 
-.option-desc {
-  font-size: 12px;
-  color: var(--text-sub);
-}
-
 .option-check {
   width: 22px;
   height: 22px;
@@ -578,140 +396,7 @@ onMounted(fetchConfig);
   box-shadow: 0 4px 10px -3px var(--primary-glow-strong);
 }
 
-/* 分润方式 radio */
-.profit-options {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.profit-radio {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 18px;
-  border: 1.5px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-elevated);
-  font-size: 13px;
-  color: var(--text-sub);
-  cursor: pointer;
-  transition: all 0.18s ease;
-}
-
-.profit-radio input {
-  accent-color: var(--primary);
-  cursor: pointer;
-}
-
-.profit-radio.active {
-  border-color: var(--primary);
-  background: var(--primary-soft);
-  color: var(--primary);
-  font-weight: 600;
-}
-
-/* 百分比分润面板 */
-.percent-panel {
-  background: var(--primary-soft);
-  border: 1px solid var(--primary-border);
-  border-radius: 14px;
-  padding: 22px 24px;
-  max-width: 460px;
-}
-
-.percent-row {
-  display: flex;
-  align-items: center;
-  margin-bottom: 14px;
-}
-
-.percent-label {
-  width: 90px;
-  font-size: 13px;
-  color: var(--text-sub);
-  text-align: right;
-  margin-right: 18px;
-}
-
-.percent-field {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.percent-field input {
-  width: 130px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 9px 12px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-main);
-  background: var(--bg-elevated);
-  box-sizing: border-box;
-  transition: all 0.18s ease;
-}
-
-.percent-field input:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 4px var(--primary-ring);
-}
-
-.percent-field input::placeholder {
-  color: var(--text-faint);
-}
-
-.percent-field .unit {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-sub);
-}
-
-.readonly-value {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--primary);
-}
-
-.percent-footer {
-  margin-top: 18px;
-  padding-left: 108px;
-}
-
-.btn {
-  border: none;
-  border-radius: 10px;
-  padding: 10px 28px;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  transition: all 0.18s ease;
-}
-
-.btn-primary {
-  background: linear-gradient(135deg, var(--primary), var(--primary-deep));
-  color: var(--text-invert);
-  box-shadow: 0 8px 20px -6px var(--primary-glow-strong);
-}
-
-.btn-primary:hover:not(:disabled) {
-  filter: brightness(1.08);
-  transform: translateY(-1px);
-}
-
-.btn-primary:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.btn-save {
-  padding: 8px 20px;
-  font-size: 12px;
-}
-
-/* 固定值分润 */
+/* 可接规格面板 */
 .fixed-panel {
   flex: 1;
   display: flex;
@@ -739,39 +424,8 @@ onMounted(fetchConfig);
   color: var(--text-main);
 }
 
-.toolbar-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 260px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 12px;
-  background: var(--bg-elevated);
-  transition: all 0.18s ease;
-}
-
-.toolbar-search:focus-within {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-ring);
-}
-
-.toolbar-search .search-icon {
-  flex-shrink: 0;
-  color: var(--text-faint);
-}
-
-.toolbar-search input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: 13px;
-  color: var(--text-main);
-}
-
-.toolbar-search input::placeholder {
+.toolbar-hint {
+  font-size: 12px;
   color: var(--text-faint);
 }
 
@@ -815,14 +469,18 @@ onMounted(fetchConfig);
   background: var(--row-hover);
 }
 
-.sku-table tbody tr.unset td {
-  background: var(--primary-faint);
-}
-
 .col-index {
   width: 56px;
   color: var(--text-faint);
   font-size: 12px;
+}
+
+.col-source {
+  width: 110px;
+}
+
+.col-game {
+  width: 120px;
 }
 
 .game-tag {
@@ -835,41 +493,17 @@ onMounted(fetchConfig);
   font-weight: 500;
 }
 
-.amount-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.amount-wrap input {
-  width: 180px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 7px 12px;
-  font-size: 13px;
-  color: var(--text-main);
-  background: var(--bg-elevated);
-  box-sizing: border-box;
-  transition: all 0.18s ease;
-}
-
-.amount-wrap input:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-ring);
-}
-
-.amount-wrap input::placeholder {
-  color: var(--text-faint);
-}
-
-.unset-badge {
-  font-size: 11px;
+/* 所属俱乐部来源：描边样式与「本账号」区分 */
+.club-tag {
+  background: transparent;
   color: var(--primary);
-  background: var(--primary-tint);
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-weight: 500;
+  border: 1px solid var(--primary-border-strong);
+}
+
+.game-id {
+  font-size: 12px;
+  color: var(--text-sub);
+  font-variant-numeric: tabular-nums;
 }
 
 .empty-cell {

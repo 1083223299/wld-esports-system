@@ -1,7 +1,10 @@
 /**
  * 主题元数据（用于换肤面板展示与校验）
- * 注意：preview 中的颜色仅用于面板预览卡片，与 theme.css 中对应主题的
- * 令牌保持一致；实际渲染颜色以 theme.css 的 [data-theme] 为准。
+ * 注意：
+ *   - swatch  仅用于换肤面板色板（圆点）展示，是主题最具代表性的表面色；
+ *     暗色主题（nightgold）直接使用黑色色板。
+ *   - preview 中的颜色仅用于面板预览卡片，与 theme.css 中对应主题的
+ *     令牌保持一致；实际渲染颜色以 theme.css 的 [data-theme] 为准。
  *
  * 特殊主题：
  *   system 跟随系统（虚拟主题）——本身不写 data-theme，
@@ -31,6 +34,7 @@ export const themes = [
     name: '跟随系统',
     subtitle: '自动匹配亮暗',
     mode: 'auto',
+    swatch: 'linear-gradient(135deg, #f4f9fd 0%, #f4f9fd 50%, #0b0d12 50%, #0b0d12 100%)',
     preview: {
       page: 'linear-gradient(135deg, #f4f9fd 0%, #0b0d12 100%)',
       sidebar: 'linear-gradient(180deg, #f4f7ff 0%, #12151d 100%)',
@@ -44,6 +48,7 @@ export const themes = [
     name: '紫夜星云',
     subtitle: '经典幻紫',
     mode: 'light',
+    swatch: '#6a35ff',
     preview: {
       page: '#f4f9fd',
       sidebar: '#f4f7ff',
@@ -57,6 +62,7 @@ export const themes = [
     name: '深海科技蓝',
     subtitle: '沉稳睿智',
     mode: 'light',
+    swatch: '#2563eb',
     preview: {
       page: '#eef4fb',
       sidebar: '#eaf2fd',
@@ -70,6 +76,7 @@ export const themes = [
     name: '翡翠流光',
     subtitle: '清新雅致',
     mode: 'light',
+    swatch: '#0d9488',
     preview: {
       page: '#effaf7',
       sidebar: '#e8f6f2',
@@ -83,6 +90,7 @@ export const themes = [
     name: '绯红烈焰',
     subtitle: '热烈高级',
     mode: 'light',
+    swatch: '#e11d48',
     preview: {
       page: '#fdf2f4',
       sidebar: '#faecef',
@@ -96,6 +104,7 @@ export const themes = [
     name: '暗夜黑金',
     subtitle: '深邃尊贵',
     mode: 'dark',
+    swatch: '#0b0d12',
     preview: {
       page: '#0b0d12',
       sidebar: '#12151d',

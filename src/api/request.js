@@ -38,6 +38,9 @@ async function http({ url, method = 'GET', data, headers = {} }) {
     requestConfig.headers.Authorization = `Bearer ${authToken}`;
   }
 
+  // 401 分支已自行 toast，catch 里不再重复提示
+  let notified = false;
+
   try {
     const targetUrl = /^https?:\/\//.test(requestConfig.url)
       ? requestConfig.url
@@ -61,23 +64,39 @@ async function http({ url, method = 'GET', data, headers = {} }) {
       payload = await res.text();
     }
 
-    if (res.status === 401) {
-      removeToken();
-      notifyError('登录已过期，请重新登录');
-      window.location.hash = '#/login';
-      throw new Error('登录已过期');
-    }
+    // ---- 错误归一化：错误提示一律直接取后端返回的 message ----
+    const isObject = payload && typeof payload === 'object';
+    const bodyMessage = isObject ? payload.message : null;
 
-    if (!res.ok) {
-      const errorMessage = payload && payload.message ? payload.message : `HTTP ${res.status}`;
+    // 401 未授权：HTTP 状态码 401，或响应体 code=401 / bizCode=UNAUTHORIZED
+    const unauthorized =
+      res.status === 401 ||
+      (isObject && (payload.code === 401 || payload.bizCode === 'UNAUTHORIZED'));
+
+    // 后端没给 message 时才用兜底文案
+    const errorMessage =
+      bodyMessage || (unauthorized ? '登录已过期，请重新登录' : `请求失败（HTTP ${res.status}）`);
+
+    if (unauthorized) {
+      // 已有登录态：清 token 并跳回登录页；登录页（无 token）只提示，不跳转
+      if (getToken()) {
+        removeToken();
+        window.location.hash = '#/login';
+      }
+      notified = true;
+      notifyError(errorMessage);
       throw new Error(errorMessage);
     }
 
-    if (payload && typeof payload === 'object' && 'code' in payload && payload.code !== 0 && payload.code !== 200) {
-      throw new Error(payload.message || '业务处理失败');
+    if (!res.ok) {
+      throw new Error(errorMessage);
     }
 
-    let result = payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
+    if (isObject && 'code' in payload && payload.code !== 0 && payload.code !== 200) {
+      throw new Error(bodyMessage || '业务处理失败');
+    }
+
+    let result = isObject && 'data' in payload ? payload.data : payload;
     for (const interceptor of requestInterceptors.after) {
       result = (await interceptor(result, res, payload)) ?? result;
     }
@@ -85,7 +104,7 @@ async function http({ url, method = 'GET', data, headers = {} }) {
     return result;
   } catch (error) {
     const message = error?.message || '请求失败';
-    if (message !== '登录已过期') {
+    if (!notified) {
       notifyError(message);
     }
     throw error;

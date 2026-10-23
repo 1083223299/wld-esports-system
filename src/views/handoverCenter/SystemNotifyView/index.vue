@@ -8,8 +8,8 @@ import { useToast } from '../../../composables/useToast';
 
 /**
  * 系统通知（入口：右上角铃铛）
- * 按消息通知列表需求图实现：
- * - 顶部「仅看未读」开关（可选中 / 取消选中）+ 全部已读
+ * 数据源：GET /api/club/notifications（09-通知，后端真实接口，挂载时拉取）
+ * - 顶部「仅看未读」开关（可选中 / 取消选中）+ 全部已读（逐个调用已读接口）
  * - 列表字段：类型标签 / 标题 / 正文 / 时间 / 查看（点击=标记已读并跳转对应页面）
  * - 跳转规则（utils/notifyJump）：
  *   · 派单转单、订单交易关闭 → 订单列表并搜索该订单（查不到报「订单不存在」）
@@ -20,6 +20,7 @@ const router = useRouter();
 const { show } = useToast();
 
 const onlyUnread = ref(false); // 仅看未读开关
+const loading = ref(false); // 列表加载中
 
 const filtered = computed(() =>
   onlyUnread.value ? notify.items.filter((i) => !i.read) : notify.items
@@ -59,9 +60,20 @@ function handleMarkAllRead() {
   show('已全部标记为已读', 'success');
 }
 
+/** 拉取后端通知列表（失败时保留现有列表，错误已由 request.js toast） */
+async function load() {
+  loading.value = true;
+  try {
+    await notify.loadFromApi();
+  } finally {
+    loading.value = false;
+  }
+}
+
 onMounted(() => {
-  // 进入本页：清空气泡
+  // 进入本页：清空气泡 + 拉取后端通知列表
   notify.clearBubbles();
+  load();
 });
 </script>
 
@@ -72,17 +84,17 @@ onMounted(() => {
       <el-checkbox v-model="onlyUnread" class="only-unread-check">仅看未读</el-checkbox>
       <div class="toolbar-right">
         <span v-if="notify.unreadCount" class="total-unread">未读 {{ notify.unreadCount }} 条</span>
-        <button
+        <!-- <button
           class="btn btn-plain btn-sm"
           type="button"
           :disabled="!notify.unreadCount"
           @click="handleMarkAllRead"
-        >全部已读</button>
+        >全部已读</button> -->
       </div>
     </div>
 
     <!-- 通知列表 -->
-    <div class="notify-list">
+    <div v-loading="loading" class="notify-list">
       <div
         v-for="item in filtered"
         :key="item.id"

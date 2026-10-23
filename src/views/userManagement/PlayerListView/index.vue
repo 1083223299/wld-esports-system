@@ -1,15 +1,17 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref } from 'vue';
 import AppModal from '../../../components/AppModal.vue';
 import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
-import { useConfirm } from '../../../composables/useConfirm';
 import { useToast } from '../../../composables/useToast';
+import { useUserStore } from '../../../stores/user';
+import { playerApi } from '../../../api/modules/player';
 import { gameApi } from '../../../api/modules/game';
 
-const { confirm } = useConfirm();
 const { show } = useToast();
+const userStore = useUserStore();
 
+/* ================= 列表筛选 ================= */
 const filter = reactive({
   playerId: '',
   playerName: '',
@@ -20,44 +22,139 @@ const filter = reactive({
 
 const page = ref(1);
 const pageSize = ref(10);
+const total = ref(0);
+const rows = ref([]);
+const loading = ref(false);
 const editDialogVisible = ref(false);
-const currentRow = ref(null);
 const editingId = ref(null); // null = 新增
+/** 弹窗提交中（防重复提交） */
+const submitting = ref(false);
 
 // ===== 可接单规格：游戏及规格选项（数据源：游戏管理 mock DB） =====
 const gameOptions = ref([]);
 
-const specOptionsOf = (game) => {
-  if (!game) return [];
-  const found = gameOptions.value.find((g) => g.name === game);
-  const specs = found ? found.specs : [];
-  // 「全部」表示该游戏不限制规格，与其他规格互斥
-  return ['全部', ...specs];
+/**
+ * 规格 ID 派生（占位）：当前游戏/规格下拉仍来自游戏管理 mock（gameApi.all），
+ * 后端规格表接口就绪前，按 gameId*100+序号 派生稳定整数 ID；
+ * 接入真实「游戏规格列表」接口后，仅需替换 gameOptions 数据源即可。
+ */
+const ALL_SPEC_ID = 0; // 「全部」哨兵值：all=true 的 UI 表示
+const specIdOf = (game, idx) => Number(game.id) * 100 + (idx + 1);
+
+const specOptionsOf = (gameId) => {
+  const game = gameOptions.value.find((g) => Number(g.id) === Number(gameId));
+  if (!game) return [{ label: '全部', value: ALL_SPEC_ID }];
+  return [
+    { label: '全部', value: ALL_SPEC_ID },
+    ...game.specs.map((s, idx) => ({ label: s, value: specIdOf(game, idx) })),
+  ];
 };
+
+// ===== 后端打手字段 → 页面字段映射 =====
+// 接口列表项 schema 未完整文档化，这里按新增/编辑响应文档的字段（id/clubId/name/phone/
+// status/canTake/inStore）映射；收益/押金/完成等统计字段接口暂未返回，缺失时优雅降级。
+const KNOWN_STATUS = ['可接单', '禁止接单', '未冻结', '冻结', '在店', '退店'];
+
+/** 状态文案：优先取后端 status 中文文案；为枚举码/未返回时按 canTake/inStore 推导 */
+function mapStatus(o = {}) {
+  const raw = String(o.status ?? '').trim();
+  if (KNOWN_STATUS.includes(raw)) return raw;
+  const inStore = Number(o.inStore) === 1;
+  if (!inStore) return '退店';
+  return Number(o.canTake) === 1 ? '可接单' : '禁止接单';
+}
+
+function mapPlayer(o = {}) {
+  const inStore = Number(o.inStore) === 1;
+  return {
+    id: o.id,
+    clubId: o.clubId,
+    name: o.name || '',
+    phone: o.phone || '',
+    status: mapStatus(o),
+    isInStore: inStore,
+    clubName: o.clubName || '—', // 本俱乐部打手列表，接口未返回俱乐部名时占位
+    // 统计字段：接口暂未返回，预留（后端补充后自动展示）
+    income: o.income ?? 0,
+    deposit: o.deposit ?? 0,
+    finished: o.finished ?? 0,
+    failed: o.failed ?? 0,
+    freezeCount: o.freezeCount ?? 0,
+  };
+}
 
 // ===== 编辑 / 新增表单 =====
 const editForm = reactive({
   name: '',
   phone: '',
   password: '',
-  specRows: [], // [{ game: '', specs: [] }]
+  specRows: [], // [{ gameId, specIds: number[] }]，specIds 含 ALL_SPEC_ID 表示「全部」
 });
 
-const rows = ref([
-  { id: '2455415', phone: '13800000001', name: '张三', clubName: '未来电商', clubId: '10001', income: 0, deposit: 0, finished: 0, failed: 0, freezeCount: 0, status: '可接单', isFrozen: false, isInStore: true, password: '123456', gameSpecs: [{ game: '三角洲', specs: ['护航'] }] },
-  { id: '2455416', phone: '13800000002', name: '李四', clubName: '未来电竞', clubId: '10002', income: 0, deposit: 0, finished: 1, failed: 2, freezeCount: 0, status: '禁止接单', isFrozen: false, isInStore: true, password: '123456', gameSpecs: [{ game: '王者荣耀', specs: ['段位上分'] }] },
-  { id: '2455417', phone: '13800000003', name: '王五', clubName: '未来娱乐', clubId: '10003', income: 3000, deposit: 5000, finished: 5, failed: 1, freezeCount: 1, status: '冻结', isFrozen: true, isInStore: true, password: '123456', gameSpecs: [{ game: '和平精英', specs: ['全部'] }] },
-  { id: '2455418', phone: '13800000004', name: '赵六', clubName: '未来文化', clubId: '10004', income: 6600, deposit: 1200, finished: 2, failed: 0, freezeCount: 0, status: '退店', isFrozen: false, isInStore: false, password: '123456', gameSpecs: [{ game: '英雄联盟', specs: ['排位上分'] }] },
-  { id: '2455419', phone: '13800000005', name: '周七', clubName: '未来俱乐部', clubId: '10005', income: 1100, deposit: 500, finished: 9, failed: 3, freezeCount: 0, status: '未冻结', isFrozen: false, isInStore: true, password: '123456', gameSpecs: [{ game: '三角洲', specs: ['全部'] }] },
-  { id: '2455420', phone: '13800000006', name: '吴八', clubName: '未来共享', clubId: '10006', income: 2300, deposit: 800, finished: 4, failed: 0, freezeCount: 0, status: '可接单', isFrozen: false, isInStore: true, password: '123456', gameSpecs: [{ game: '永劫无间', specs: ['排位赛'] }] },
-  { id: '2455421', phone: '13800000007', name: '郑九', clubName: '未来渠道', clubId: '10007', income: 900, deposit: 200, finished: 3, failed: 1, freezeCount: 0, status: '冻结', isFrozen: true, isInStore: true, password: '123456', gameSpecs: [{ game: '王者荣耀', specs: ['陪玩'] }] },
-  { id: '2455422', phone: '13800000008', name: '孙十', clubName: '未来科技', clubId: '10008', income: 5000, deposit: 3000, finished: 8, failed: 2, freezeCount: 0, status: '在店', isFrozen: false, isInStore: true, password: '123456', gameSpecs: [{ game: '三角洲', specs: ['陪玩'] }] },
-  { id: '2455423', phone: '13800000009', name: '黄十一', clubName: '未来联盟', clubId: '10009', income: 200, deposit: 100, finished: 1, failed: 0, freezeCount: 0, status: '可接单', isFrozen: false, isInStore: true, password: '123456', gameSpecs: [{ game: '和平精英', specs: ['单排上分'] }] },
-  { id: '2455424', phone: '13800000010', name: '陈十二', clubName: '未来工作室', clubId: '10010', income: 1000, deposit: 300, finished: 7, failed: 2, freezeCount: 0, status: '退店', isFrozen: false, isInStore: false, password: '123456', gameSpecs: [{ game: '英雄联盟', specs: ['云顶之弈'] }] },
-]);
+/* ================= 列表加载（服务端分页） ================= */
+function buildListParams() {
+  const params = { page: page.value, pageSize: pageSize.value };
+  // 状态筛选：接口 status 原样透传；后端状态枚举确认后在此对齐
+  if (filter.status) params.status = filter.status;
+  // 接口仅支持单一 keyword，按 名称 > 手机号 > ID 优先级取一个非空值
+  const keyword = filter.playerName?.trim() || filter.phone?.trim() || filter.playerId?.trim();
+  if (keyword) params.keyword = keyword;
+  // createTime 接口暂未提供对应筛选参数，预留（后端补充后可在此追加）
+  return params;
+}
 
-// 列表状态（含：可接单、禁止接单、未冻结、冻结、在店、退店）
-const statusOptions = ['可接单', '禁止接单', '未冻结', '冻结', '在店', '退店'];
+async function loadPlayers() {
+  loading.value = true;
+  try {
+    const res = await playerApi.list(buildListParams());
+    const list = res && Array.isArray(res.list) ? res.list : [];
+    rows.value = list.map(mapPlayer);
+    total.value = Number(res?.total) || 0;
+  } catch {
+    // 错误提示已由 request.js 统一 toast
+    rows.value = [];
+    total.value = 0;
+  } finally {
+    loading.value = false;
+  }
+}
+
+function handleSearch(values) {
+  Object.assign(filter, values);
+  page.value = 1;
+  loadPlayers();
+}
+
+function handleReset() {
+  Object.keys(filter).forEach((key) => {
+    if (Array.isArray(filter[key])) filter[key] = [];
+    else filter[key] = '';
+  });
+  page.value = 1;
+  loadPlayers();
+}
+
+function pageChange(nextPage) {
+  page.value = nextPage;
+  loadPlayers();
+}
+
+function getStatusClass(status) {
+  switch (status) {
+    case '可接单':
+      return 'status-success';
+    case '禁止接单':
+      return 'status-danger';
+    case '冻结':
+      return 'status-warn';
+    case '退店':
+      return 'status-muted';
+    default:
+      return 'status-info';
+  }
+}
+
+// ===== 列表列 / 搜索字段配置 =====
 // 筛选状态：在店 / 离店
 const statusFilterOptions = ['在店', '离店'];
 
@@ -100,90 +197,67 @@ const searchFields = [
   },
 ];
 
-const filteredRows = computed(() => {
-  const matches = (value, matcher) => {
-    if (!value) return true;
-    return String(matcher).toLowerCase().includes(String(value).toLowerCase());
-  };
-
-  return rows.value.filter((row) => {
-    const playerIdMatch = !filter.playerId || row.id === String(filter.playerId).trim(); // 完全匹配
-    const playerNameMatch = !filter.playerName || matches(filter.playerName, row.name); // 模糊匹配
-    const phoneMatch = !filter.phone || row.phone === String(filter.phone).trim(); // 完全匹配
-    const statusMatch = !filter.status || (filter.status === '在店' ? row.isInStore === true : row.isInStore === false);
-    return playerIdMatch && playerNameMatch && phoneMatch && statusMatch;
-  });
-});
-
-const total = computed(() => filteredRows.value.length);
-
-const pagedRows = computed(() => {
-  const start = (page.value - 1) * pageSize.value;
-  return filteredRows.value.slice(start, start + pageSize.value);
-});
-
-function handleSearch(values) {
-  Object.assign(filter, values);
-  page.value = 1;
+// ===== 规格数据 ↔ 接口数据转换 =====
+/** 表单行 → 接口规格项（filter 掉未选游戏的空行） */
+function toApiSpecs(specRows) {
+  return specRows
+    .filter((r) => r.gameId !== null && r.gameId !== undefined && r.gameId !== '')
+    .map((r) => {
+      const ids = Array.isArray(r.specIds) ? r.specIds : [];
+      const hasAll = ids.includes(ALL_SPEC_ID);
+      return {
+        gameId: Number(r.gameId),
+        all: hasAll,
+        // all=true 或为空表示该游戏全部规格
+        specIds: hasAll ? [] : ids.filter((id) => id !== ALL_SPEC_ID),
+      };
+    });
 }
 
-function handleReset() {
-  Object.keys(filter).forEach((key) => {
-    if (Array.isArray(filter[key])) filter[key] = [];
-    else filter[key] = '';
-  });
-  page.value = 1;
-}
-
-function pageChange(nextPage) {
-  page.value = nextPage;
-}
-
-function getStatusClass(status) {
-  switch (status) {
-    case '可接单':
-      return 'status-success';
-    case '禁止接单':
-      return 'status-danger';
-    case '冻结':
-      return 'status-warn';
-    case '退店':
-      return 'status-muted';
-    default:
-      return 'status-info';
-  }
+/** 接口规格项 → 表单行 */
+function fromApiSpecs(list) {
+  return (Array.isArray(list) ? list : [])
+    .filter((s) => s && s.gameId !== null && s.gameId !== undefined)
+    .map((s) => ({
+      gameId: Number(s.gameId),
+      specIds: s.all ? [ALL_SPEC_ID] : [...(s.specIds || [])],
+    }));
 }
 
 // ===== 新增 / 编辑 =====
 function openCreate() {
   editingId.value = null;
-  currentRow.value = null;
   Object.assign(editForm, {
     name: '',
     phone: '',
     password: '',
-    specRows: [{ game: '', specs: ['全部'] }],
+    specRows: [{ gameId: null, specIds: [ALL_SPEC_ID] }],
   });
   editDialogVisible.value = true;
 }
 
-function openEdit(row) {
+async function openEdit(row) {
   editingId.value = row.id;
-  currentRow.value = row;
   Object.assign(editForm, {
     name: row.name,
     phone: row.phone || '',
-    password: row.password || '',
-    specRows:
-      row.gameSpecs && row.gameSpecs.length
-        ? row.gameSpecs.map((item) => ({ game: item.game, specs: [...(item.specs || [])] }))
-        : [{ game: '', specs: ['全部'] }],
+    password: '', // 编辑时留空表示不修改密码
+    specRows: [{ gameId: null, specIds: [ALL_SPEC_ID] }],
   });
   editDialogVisible.value = true;
+  // 拉取该打手已配置规格（按游戏分组），失败不阻塞弹窗
+  try {
+    const specs = await playerApi.getSpecs(row.id);
+    const rowsFromApi = fromApiSpecs(specs);
+    editForm.specRows =
+      rowsFromApi.length > 0 ? rowsFromApi : [{ gameId: null, specIds: [ALL_SPEC_ID] }];
+  } catch {
+    // 错误提示已由 request.js 统一 toast，保留默认空行
+  }
 }
 
 function addSpecRow() {
-  editForm.specRows.push({ game: '', specs: ['全部'] });
+  editForm.specRows.push({ gameId: null, specIds: [ALL_SPEC_ID] });
 }
 
 function removeSpecRow(idx) {
@@ -195,125 +269,106 @@ function removeSpecRow(idx) {
 }
 
 function handleSpecRowGameChange(row) {
-  row.specs = ['全部']; // 切换游戏后重置规格为「全部」
+  row.specIds = [ALL_SPEC_ID]; // 切换游戏后重置规格为「全部」
 }
 
 function handleSpecChange(row) {
   // 「全部」与其他规格互斥
-  if (row.specs && row.specs.includes('全部') && row.specs.length > 1) {
-    row.specs = ['全部'];
+  if (row.specIds && row.specIds.includes(ALL_SPEC_ID) && row.specIds.length > 1) {
+    row.specIds = [ALL_SPEC_ID];
   }
 }
 
-function submitEdit() {
+async function submitEdit() {
   const name = editForm.name.trim();
   const phone = editForm.phone.trim();
   const password = editForm.password;
+  const isEdit = !!editingId.value;
 
-  // 打手名称：必填，平台维护唯一性校验
+  // 打手名称：必填（唯一性由后端校验，失败时 request.js 统一 toast 后端 message）
   if (!name) {
     show('请输入打手名称', 'warning');
     return;
   }
-  const nameDup = rows.value.find((r) => r.name === name && r.id !== editingId.value);
-  if (nameDup) {
-    show('打手名称已存在，请更换', 'warning');
-    return;
-  }
-
-  // 手机号：必填，平台维护唯一性校验
+  // 手机号：必填
   if (!phone) {
     show('请输入手机号', 'warning');
     return;
   }
-  const phoneDup = rows.value.find((r) => r.phone === phone && r.id !== editingId.value);
-  if (phoneDup) {
-    show('手机号已存在，请更换', 'warning');
-    return;
-  }
-
-  // 密码：6位以上数字
-  if (!password) {
+  // 密码：新增必填；编辑留空表示不修改，填写时需为 6 位以上数字
+  if (!isEdit && !password) {
     show('请输入密码', 'warning');
     return;
   }
-  if (!/^\d{6,}$/.test(password)) {
+  if (password && !/^\d{6,}$/.test(password)) {
     show('密码需为6位以上数字', 'warning');
     return;
   }
 
   // 可接单规格：至少一行、游戏必选、所选游戏不允许重复、每个游戏至少选一个规格
-  const validRows = editForm.specRows.filter((r) => r.game);
+  const validRows = editForm.specRows.filter(
+    (r) => r.gameId !== null && r.gameId !== undefined && r.gameId !== ''
+  );
   if (!validRows.length) {
     show('请至少配置一行可接单规格', 'warning');
     return;
   }
-  const games = validRows.map((r) => r.game);
-  const dupGame = games.find((g, i) => games.indexOf(g) !== i);
+  const dupGame = validRows.find((r, i, arr) =>
+    arr.findIndex((x) => Number(x.gameId) === Number(r.gameId)) !== i ? r : null
+  );
   if (dupGame) {
-    show(`游戏「${dupGame}」重复，所选的游戏不允许重复`, 'warning');
+    show('所选游戏不允许重复', 'warning');
     return;
   }
-  if (validRows.some((r) => !r.specs || !r.specs.length)) {
+  if (validRows.some((r) => !Array.isArray(r.specIds) || !r.specIds.length)) {
     show('请为每个游戏选择至少一个规格', 'warning');
     return;
   }
 
-  const gameSpecs = validRows.map((r) => ({ game: r.game, specs: [...r.specs] }));
+  // 组装请求体：name/phone 必填，password 编辑留空则不提交，clubId 取登录会话
+  const payload = { name, phone };
+  if (password) payload.password = password;
+  if (userStore.user?.clubId) payload.clubId = Number(userStore.user.clubId);
 
-  if (editingId.value) {
-    Object.assign(currentRow.value, {
-      name,
-      phone,
-      password,
-      gameSpecs,
-    });
-    show('编辑成功', 'success');
-  } else {
-    // 新增：新数据默认 可接单 / 未冻结 / 在店
-    const nextId = String(Math.max(...rows.value.map((r) => Number(r.id))) + 1);
-    rows.value.unshift({
-      id: nextId,
-      name,
-      phone,
-      password,
-      clubName: '—',
-      clubId: '',
-      income: 0,
-      deposit: 0,
-      finished: 0,
-      failed: 0,
-      freezeCount: 0,
-      status: '可接单',
-      isFrozen: false,
-      isInStore: true,
-      gameSpecs,
-    });
-    show('新增成功', 'success');
+  const specs = toApiSpecs(editForm.specRows);
+  submitting.value = true;
+  try {
+    let id = editingId.value;
+    if (isEdit) {
+      await playerApi.update(id, payload);
+    } else {
+      const created = await playerApi.create(payload);
+      id = created?.id;
+      if (id === null || id === undefined) {
+        throw new Error('新增成功但未返回打手 ID，无法配置规格');
+      }
+    }
+    // 规格配置（specs 空数组表示清空）
+    await playerApi.setSpecs(id, specs);
+    show(isEdit ? '编辑成功' : '新增成功', 'success');
+    editDialogVisible.value = false;
+    await loadPlayers();
+  } catch {
+    // 后端错误已由 request.js 统一 toast，这里不重复提示
+  } finally {
+    submitting.value = false;
   }
-  editDialogVisible.value = false;
 }
 
-// ===== 退店：仅在「在店」下展示，需二次确认 =====
+// ===== 退店：OpenAPI 本次联调未提供对应端点，待后端补充后接入 =====
 async function triggerLeaveStore(row) {
-  const ok = await confirm({
-    title: '退店确认',
-    message: `确认将打手「${row.name}」退店吗？退店后将无法接单。`,
-    okText: '确认退店',
-  });
-  if (!ok) return;
-  row.isInStore = false;
-  row.status = '退店';
-  show('退店成功', 'success');
+  show(`退店接口未在本次联调范围（OpenAPI 未提供对应端点），打手「${row.name}」退店待后端接入后支持`, 'warning');
 }
 
 onMounted(async () => {
+  // 游戏/规格选项（当前为 mock，规格 ID 为占位派生值）
   try {
     const games = await gameApi.all();
     gameOptions.value = games || [];
   } catch (e) {
     show(e?.message || '游戏列表加载失败', 'error');
   }
+  loadPlayers();
 });
 </script>
 
@@ -329,34 +384,36 @@ onMounted(async () => {
       />
     </div>
 
-    <DataTable
-      :columns="columns"
-      :data="pagedRows"
-      :total="total"
-      :page="page"
-      :page-size="pageSize"
-      @page-change="pageChange"
-    >
-      <template #toolbar>
-        <div class="toolbar-row">
-          <button class="btn btn-primary" @click="openCreate">新增</button>
-        </div>
-      </template>
+    <div v-loading="loading" class="list-page__table-wrap">
+      <DataTable
+        :columns="columns"
+        :data="rows"
+        :total="total"
+        :page="page"
+        :page-size="pageSize"
+        @page-change="pageChange"
+      >
+        <template #toolbar>
+          <div class="toolbar-row">
+            <button class="btn btn-primary" @click="openCreate">新增</button>
+          </div>
+        </template>
 
-      <template #cell-income="{ row }">{{ row.income.toFixed(2) }}</template>
-      <template #cell-deposit="{ row }">{{ row.deposit.toFixed(2) }}</template>
+        <template #cell-income="{ row }">{{ row.income.toFixed(2) }}</template>
+        <template #cell-deposit="{ row }">{{ row.deposit.toFixed(2) }}</template>
 
-      <template #cell-status="{ row }">
-        <span :class="['status-badge', getStatusClass(row.status)]">{{ row.status }}</span>
-      </template>
+        <template #cell-status="{ row }">
+          <span :class="['status-badge', getStatusClass(row.status)]">{{ row.status }}</span>
+        </template>
 
-      <template #cell-op="{ row }">
-        <div class="action-group">
-          <button class="link-btn" @click="openEdit(row)">编辑</button>
-          <button v-if="row.isInStore" class="link-btn muted" @click="triggerLeaveStore(row)">退店</button>
-        </div>
-      </template>
-    </DataTable>
+        <template #cell-op="{ row }">
+          <div class="action-group">
+            <button class="link-btn" @click="openEdit(row)">编辑</button>
+            <button v-if="row.isInStore" class="link-btn muted" @click="triggerLeaveStore(row)">退店</button>
+          </div>
+        </template>
+      </DataTable>
+    </div>
 
     <AppModal v-model="editDialogVisible" title="编辑/新增" width="640px">
       <div class="dialog-form player-modal-content">
@@ -369,31 +426,41 @@ onMounted(async () => {
           <input v-model="editForm.phone" maxlength="11" placeholder="请输入手机号" />
         </div>
         <div class="form-row">
-          <label class="required">密码</label>
-          <input v-model="editForm.password" type="password" maxlength="20" placeholder="请输入密码（6位以上数字）" />
+          <label :class="{ required: !editingId }">密码</label>
+          <input
+            v-model="editForm.password"
+            type="password"
+            maxlength="20"
+            :placeholder="editingId ? '留空则不修改（6位以上数字）' : '请输入密码（6位以上数字）'"
+          />
         </div>
 
         <div class="form-row spec-section">
           <label class="required">可接单规格</label>
           <div v-for="(row, idx) in editForm.specRows" :key="idx" class="spec-row">
             <el-select
-              v-model="row.game"
+              v-model="row.gameId"
               class="spec-game"
               placeholder="请选择游戏"
               filterable
               @change="handleSpecRowGameChange(row)"
             >
-              <el-option v-for="g in gameOptions" :key="g.name" :label="g.name" :value="g.name" />
+              <el-option v-for="g in gameOptions" :key="g.id" :label="g.name" :value="g.id" />
             </el-select>
             <el-select
-              v-model="row.specs"
+              v-model="row.specIds"
               class="spec-multi"
               placeholder="请选择规格（可多选）"
               multiple
               collapse-tags
               @change="handleSpecChange(row)"
             >
-              <el-option v-for="s in specOptionsOf(row.game)" :key="s" :label="s" :value="s" />
+              <el-option
+                v-for="opt in specOptionsOf(row.gameId)"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
             </el-select>
             <button
               v-if="editForm.specRows.length > 1"
@@ -418,7 +485,9 @@ onMounted(async () => {
       </div>
       <template #footer>
         <button class="btn btn-plain" @click="editDialogVisible = false">取消</button>
-        <button class="btn btn-primary" @click="submitEdit">确定</button>
+        <button class="btn btn-primary" :disabled="submitting" @click="submitEdit">
+          {{ submitting ? '提交中…' : '确定' }}
+        </button>
       </template>
     </AppModal>
   </div>
@@ -429,6 +498,23 @@ onMounted(async () => {
   height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+.list-page__table-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.list-page__table-wrap .data-table {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.list-page__table-wrap .list-page__body {
+  flex: 1;
 }
 
 .action-group {
@@ -603,6 +689,11 @@ onMounted(async () => {
   transform: translateY(1px);
 }
 
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .btn-plain {
   background: var(--bg-hover);
   color: var(--text-sub);
@@ -676,7 +767,6 @@ onMounted(async () => {
 
 .modal-box:has(.player-modal-content) .modal-footer {
   padding: 16px 24px 20px;
-  /* background: linear-gradient(180deg, rgba(248, 250, 255, 0.7), rgba(243, 240, 255, 0.95)); */
   border-top: 1px solid var(--primary-faint);
 }
 </style>

@@ -1,27 +1,45 @@
 <script setup>
-import { computed, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessageBox } from 'element-plus';
 import AppModal from '../../../components/AppModal.vue';
 import DataTable from '../../../components/DataTable.vue';
 import { useToast } from '../../../composables/useToast';
+import { walletApi } from '../../../api/modules/wallet';
 import {
   DEPOSIT_FLOW_TYPE_OPTIONS,
   FLOW_TYPE_TEXT,
   WITHDRAW_RULES,
-  depositAccount,
-  buildDepositFlowRows,
 } from './mockData';
 
 /**
- * 财务管理 > 我的押金
- * 顶部押金总额卡片 + 押金明细流水表格 + 提现弹窗
- * 提现弹窗与「我的钱包」保持一致：4 个弹窗（提现 / 二次确认 / 错误提示 / 编辑支付宝）
+ * 财务管理 > 我的押金（接口联调版）
+ * - 余额卡片：GET /api/club/wallets/me（deposit / income / walletFrozen）
+ * - 押金明细：GET /api/club/wallets/txns（walletType=DEPOSIT 分页）
+ * - 提现：POST /api/club/wallets/withdraw（walletType=DEPOSIT + requestId 幂等）
+ * 联调说明：
+ *  1. 流水接口暂未提供类型/时间筛选参数，页面按 total 循环拉取全量后
+ *     在前端筛选 + 分页；若数据量增大或后端支持筛选，可改回服务端分页。
+ *  2. 支付宝账号/姓名、退店状态、实名状态、当日已提交次数等字段接口暂未返回，
+ *     暂用本地默认值 + localStorage 兜底，待后端提供后替换。
  */
 const { show } = useToast();
 
-/* ================= 押金账户（mock，可在弹窗内修改） ================= */
-const account = reactive({ ...depositAccount });
-const submittedToday = ref(account.submittedToday);
+/* ================= 押金余额（接口） ================= */
+const balance = ref({ deposit: 0, income: 0, walletFrozen: false });
+const loading = ref(false);
+
+/* ---- 提现所需本地兜底字段（接口未返回，待后端提供后替换） ---- */
+const ALIPAY_ACCOUNT_KEY = 'wld_deposit_alipay_account';
+const ALIPAY_NAME_KEY = 'wld_deposit_alipay_name';
+const account = reactive({
+  alipayAccount: localStorage.getItem(ALIPAY_ACCOUNT_KEY) || '16541656416',
+  alipayName: localStorage.getItem(ALIPAY_NAME_KEY) || '张三',
+  hasQuitStore: true, // 是否已退店（接口未返回，后端提现接口应最终校验）
+  quitAt: '2026-09-20 10:00:00', // 退店时间（接口未返回）
+  isRealNameVerified: true, // 是否已实名（接口未返回）
+});
+// 当日已提交次数（接口未返回，前端体验层计数，后端应最终校验）
+const submittedToday = ref(0);
 
 // 退店距今天数
 const daysSinceQuit = computed(() => {
@@ -35,8 +53,71 @@ const canShowWithdrawBtn = computed(
   () =>
     account.hasQuitStore &&
     daysSinceQuit.value >= WITHDRAW_RULES.quitStoreRequiredDays &&
-    !account.walletFrozen,
+    !balance.value.walletFrozen,
 );
+
+/* ================= 余额 / 流水拉取 ================= */
+async function fetchBalance() {
+  try {
+    const data = await walletApi.me();
+    balance.value = {
+      deposit: Number(data?.deposit) || 0,
+      income: Number(data?.income) || 0,
+      walletFrozen: Boolean(data?.walletFrozen),
+    };
+  } catch (e) {
+    // request.js 已统一 toast，保持原值
+  }
+}
+
+// 流水单页拉取条数（循环拉全量后前端筛选分页）
+const FLOW_FETCH_PAGE_SIZE = 100;
+
+/** 服务端流水 → 表格行 */
+function normalizeTxn(item) {
+  return {
+    id: item.id ?? `${item.createdAt}-${item.bizType}-${item.amount}`,
+    type: item.bizType,
+    typeText: FLOW_TYPE_TEXT[item.bizType] || item.bizType || '—',
+    amount: Number(item.amount) || 0,
+    reason: item.reason || '',
+    orderNo: item.orderNo || '',
+    time: item.createdAt || '',
+  };
+}
+
+async function fetchFlowList() {
+  loading.value = true;
+  try {
+    const all = [];
+    let pageNo = 1;
+    let totalCount = Infinity;
+    // 接口未提供筛选参数，按 total 循环拉取全量
+    while (all.length < totalCount) {
+      const data = await walletApi.txns({
+        walletType: 'DEPOSIT',
+        page: pageNo,
+        pageSize: FLOW_FETCH_PAGE_SIZE,
+      });
+      const list = Array.isArray(data?.list) ? data.list : [];
+      totalCount = data?.total ?? all.length + list.length;
+      all.push(...list.map(normalizeTxn));
+      if (!list.length) break;
+      pageNo += 1;
+      if (pageNo > 200) break; // 防御：最多 2 万条，超出需改服务端分页
+    }
+    allRows.value = all;
+  } catch (e) {
+    // request.js 已统一 toast，保留原数据
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(() => {
+  fetchBalance();
+  fetchFlowList();
+});
 
 /* ================= 押金明细筛选 ================= */
 const filter = reactive({
@@ -45,16 +126,18 @@ const filter = reactive({
   endTime: '',
 });
 
+// 类型下拉选项（含"全部"；value 用展示文案，与表格行 typeText 匹配）
 const typeOptions = computed(() => [
   { label: '全部', value: '' },
-  ...DEPOSIT_FLOW_TYPE_OPTIONS,
+  ...DEPOSIT_FLOW_TYPE_OPTIONS.map((opt) => ({ ...opt, value: opt.label })),
 ]);
 
 /* ================= 押金明细表格 ================= */
-const allRows = ref(buildDepositFlowRows(658));
+const allRows = ref([]);
 const columns = [
   { key: 'typeText', title: '类型' },
   { key: 'amount', title: '金额（元）' },
+  { key: 'orderNo', title: '关联订单号' },
   { key: 'reason', title: '原因' },
   { key: 'time', title: '时间' },
 ];
@@ -64,7 +147,7 @@ const pageSize = ref(10);
 
 const filteredRows = computed(() =>
   allRows.value.filter((row) => {
-    if (filter.type && row.type !== filter.type) return false;
+    if (filter.type && row.typeText !== filter.type) return false;
     const day = row.time.slice(0, 10);
     if (filter.startTime && day < filter.startTime) return false;
     if (filter.endTime && day > filter.endTime) return false;
@@ -97,6 +180,7 @@ function formatAmount(val) {
 /* ================= 提现弹窗 ================= */
 const withdrawVisible = ref(false);
 const withdrawForm = reactive({ amount: '' });
+const withdrawing = ref(false);
 
 // 当天剩余可提交次数
 const remainTimes = computed(() =>
@@ -124,7 +208,7 @@ function openWithdrawModal() {
 }
 
 function fillAllAmount() {
-  withdrawForm.amount = Number(account.withdrawableBalance).toFixed(2);
+  withdrawForm.amount = Number(balance.value.deposit).toFixed(2);
 }
 
 // 当前是否在可提现时间段内
@@ -146,7 +230,7 @@ const confirmVisible = ref(false);
 
 function handleSubmitWithdraw() {
   // 1. 钱包冻结
-  if (account.walletFrozen) {
+  if (balance.value.walletFrozen) {
     showError('您的钱包已冻结，请联系客服咨询');
     return;
   }
@@ -175,7 +259,7 @@ function handleSubmitWithdraw() {
     show('金额最多保留两位小数', 'warning');
     return;
   }
-  if (amt > Number(account.withdrawableBalance)) {
+  if (amt > Number(balance.value.deposit)) {
     show('提现金额不能超过可提现余额', 'warning');
     return;
   }
@@ -183,30 +267,39 @@ function handleSubmitWithdraw() {
   confirmVisible.value = true;
 }
 
-function confirmWithdraw() {
-  const amt = Number(withdrawForm.amount);
-  account.withdrawableBalance = Number((account.withdrawableBalance - amt).toFixed(2));
-  account.depositBalance = Number((account.depositBalance - amt).toFixed(2));
-  submittedToday.value += 1;
-
-  // 往明细头部插入一条「提现成功」
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  allRows.value.unshift({
-    id: `flow-${Date.now()}`,
-    type: 'withdraw_success',
-    typeText: FLOW_TYPE_TEXT.withdraw_success,
-    amount: -amt,
-    reason: '',
-    time: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
-  });
-
-  confirmVisible.value = false;
-  withdrawVisible.value = false;
-  show('提现申请已提交', 'success');
+// 生成幂等请求号（requestId）
+function genRequestId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/* ---- 编辑支付宝账号弹窗 ---- */
+async function confirmWithdraw() {
+  const amt = Number(withdrawForm.amount);
+  withdrawing.value = true;
+  try {
+    await walletApi.withdraw({
+      amount: amt,
+      alipayAccount: account.alipayAccount,
+      alipayName: account.alipayName,
+      requestId: genRequestId(),
+    });
+    submittedToday.value += 1;
+    confirmVisible.value = false;
+    withdrawVisible.value = false;
+    show('提现申请已提交', 'success');
+    // 提现后刷新余额与流水
+    fetchBalance();
+    fetchFlowList();
+  } catch (e) {
+    // request.js 已统一 toast，弹窗保持打开，可修改后重试
+  } finally {
+    withdrawing.value = false;
+  }
+}
+
+/* ---- 编辑支付宝账号弹窗（本地持久化兜底） ---- */
 const alipayEditVisible = ref(false);
 const alipayEditForm = reactive({ account: '' });
 
@@ -221,6 +314,7 @@ function saveAlipay() {
     return;
   }
   account.alipayAccount = alipayEditForm.account.trim();
+  localStorage.setItem(ALIPAY_ACCOUNT_KEY, account.alipayAccount);
   alipayEditVisible.value = false;
   show('支付宝账号已更新', 'success');
 }
@@ -229,9 +323,9 @@ function saveAlipay() {
 <template>
   <div class="my-deposit-page">
     <!-- ===== 顶部：我的押金卡片 ===== -->
-    <div class="balance-card">
+    <div v-loading="loading" class="balance-card">
       <p class="balance-label">我的押金</p>
-      <p class="balance-value">¥{{ Number(account.depositBalance).toFixed(2) }}</p>
+      <p class="balance-value">¥{{ Number(balance.deposit).toFixed(2) }}</p>
       <button
         v-if="canShowWithdrawBtn"
         type="button"
@@ -279,6 +373,7 @@ function saveAlipay() {
 
       <!-- 明细表格 -->
       <DataTable
+        v-loading="loading"
         :columns="columns"
         :data="rows"
         :total="total"
@@ -290,6 +385,10 @@ function saveAlipay() {
           <span :class="['amount-text', row.amount >= 0 ? 'amount-in' : 'amount-out']">
             {{ formatAmount(row.amount) }}
           </span>
+        </template>
+        <template #cell-orderNo="{ row }">
+          <span v-if="row.orderNo">{{ row.orderNo }}</span>
+          <span v-else class="muted-text">—</span>
         </template>
         <template #cell-reason="{ row }">
           <span v-if="row.reason">{{ row.reason }}</span>
@@ -320,7 +419,7 @@ function saveAlipay() {
 
         <!-- 可提现余额 / 当日剩余次数 -->
         <div class="form-row sub-row">
-          <span class="sub-text">可提现余额：¥{{ Number(account.withdrawableBalance).toFixed(2) }}</span>
+          <span class="sub-text">可提现余额：¥{{ Number(balance.deposit).toFixed(2) }}</span>
         </div>
         <div class="form-row sub-row">
           <span class="sub-text">当天剩余提交次数：{{ remainTimes }}次</span>
@@ -347,8 +446,10 @@ function saveAlipay() {
         <div class="confirm-row"><span class="confirm-label">提现金额</span><span class="confirm-amount">¥{{ Number(withdrawForm.amount || 0).toFixed(2) }}</span></div>
       </div>
       <template #footer>
-        <button class="btn btn-plain" type="button" @click="confirmVisible = false">取消</button>
-        <button class="btn btn-primary" type="button" @click="confirmWithdraw">确定提现</button>
+        <button class="btn btn-plain" type="button" :disabled="withdrawing" @click="confirmVisible = false">取消</button>
+        <button class="btn btn-primary" type="button" :disabled="withdrawing" @click="confirmWithdraw">
+          {{ withdrawing ? '提交中…' : '确定提现' }}
+        </button>
       </template>
     </AppModal>
 
@@ -614,6 +715,11 @@ function saveAlipay() {
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .btn-primary {

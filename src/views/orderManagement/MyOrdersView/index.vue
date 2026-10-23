@@ -1,25 +1,28 @@
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import AppModal from '../../../components/AppModal.vue';
 import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
 import { useToast } from '../../../composables/useToast';
-import { orderStore, ORDER_STATUS_OPTIONS, PLAYER_OPTIONS } from './mockData';
+import { clubOrderApi } from '../../../api/modules/clubOrder';
+import { ORDER_STATUS_OPTIONS, PLAYER_OPTIONS } from './mockData';
 
 /**
- * 订单管理 > 我的订单
- * 依据需求图实现：
+ * 订单管理 > 我的订单（真实接口联调）
+ * 数据源：GET /api/club/orders/mine（无 Query 参数，前端筛选分页）
  * - 筛选：订单号 / 状态 / 俱乐部接单时间
  * - 表格：订单号(复制+悬浮下单用户) / 金额 / 项目 / 游戏名称 / 客户端 / 游戏规格 /
  *         角色名 / 订单状态(含售后中·冻结·部分退款标签) / 审核状态(主·子订单查看关系) /
  *         派单客服 / 俱乐部接单时间 / 操作
  * - 操作按钮规则：
- *   ① 冻结 / 售后中标签 → 无加减价、无转单，仅「查看」
- *   ② 已转单 → 隐藏加减价按钮
+ *   ① 冻结 / 售后中标签 → 无加减价、无转单、无提交验收，仅「查看」
+ *   ② 已指派打手（转单等价） → 隐藏加减价按钮
  *   ③ 部分退款 → 隐藏加减价按钮（涉部分退款，加减价失效）
- *   ④ 审核已驳回 → 隐藏转单按钮
- * - 弹窗：订单详情 / 加减价 / 转单 / 查看关系
+ *   ④ 审核已驳回 → 隐藏转单按钮；审核未提交/已驳回可提交验收
+ * - 接口未返回的展示字段（游戏名/规格/客户端/角色名/接单时间/日志/凭证/分润明细等）：
+ *   映射层保留字段占位，后端补充后自动展示，缺失时模板优雅降级
+ * - 弹窗：订单详情 / 加减价 / 转单（按名额指派打手）/ 提交验收 / 查看关系
  * - 通知跳转：系统通知点击「查看」会带 orderNo 跳到本页，自动填入搜索框并筛选；
  *   特殊场景：查询不到该订单时提示「订单不存在」
  */
@@ -52,21 +55,33 @@ function handleReset() {
   page.value = 1;
 }
 
+/* ================= 状态映射（后端枚举 → 页面枚举） ================= */
+const STATUS_MAP = {
+  WAIT_TAKE: 'pending', // 待接单
+  IN_PROGRESS: 'processing', // 进行中
+  COMPLETED: 'completed', // 已完成
+  CLOSED: 'closed', // 交易关闭
+};
+const AUDIT_MAP = {
+  UNSUBMITTED: 'none', // 未提交
+  PENDING: 'pending', // 待审核
+  REJECTED: 'rejected', // 已驳回
+};
+
 /* ================= 通知跳转：自动按订单号搜索 ================= */
 // 系统通知点击「查看」时带 orderNo 跳到本页：自动填入搜索框并筛选；
 // 特殊场景：查询不到该订单时提示「订单不存在」（需求图约定）
+// 接口为异步加载，数据就绪（loadedOnce）后再判定订单是否存在
 function applyOrderNoFromUrl() {
   const q = String(route.query.orderNo || '').trim();
   if (!q) return;
   filter.orderNo = q;
   page.value = 1;
-  nextTick(() => {
-    if (!filteredRows.value.length) {
-      show(`订单不存在：${q}`, 'warning');
-    }
-  });
+  if (loadedOnce.value && !filteredRows.value.length) {
+    show(`订单不存在：${q}`, 'warning');
+  }
 }
-onMounted(applyOrderNoFromUrl);
+onMounted(loadOrders);
 // 同页多次从通知跳转（带不同订单号）时响应更新
 watch(() => route.query.orderNo, applyOrderNoFromUrl);
 
@@ -88,18 +103,120 @@ const columns = [
 
 const page = ref(1);
 const pageSize = ref(10);
+const loading = ref(false);
+const loadedOnce = ref(false);
+const orders = ref([]);
 
 const STATUS_TEXT = { pending: '待接单', processing: '进行中', completed: '已完成', closed: '交易关闭' };
 
+/* ===== 后端订单字段 → 页面行映射 =====
+ * 接口未返回游戏名/规格/客户端/角色名/接单时间/日志/凭证/分润明细等展示字段，
+ * 映射层保留对应字段（后端补充后可自动展示），缺失时模板侧优雅降级。
+ */
+function mapOrder(o = {}) {
+  const frozen = Number(o.frozen) === 1;
+  const afterSale = Number(o.afterSaleFlag) === 1;
+  const partialRefunded = Number(o.partialRefunded) === 1;
+  const tags = [];
+  if (afterSale) tags.push('售后中');
+  if (frozen) tags.push('冻结');
+  if (partialRefunded) tags.push('部分退款');
+
+  // 订单金额口径：订单金额 + 平台加减价净值 + 俱乐部加减价净值（减价为负）
+  const actualAmount =
+    (Number(o.amount) || 0) + (Number(o.platformAdjust) || 0) + (Number(o.clubAdjust) || 0);
+  const clubAdjust = Number(o.clubAdjust) || 0;
+
+  return {
+    id: o.id,
+    orderNo: o.orderNo || '',
+    customerTip: o.customerTip || '', // 接口未返回下单用户，预留
+    amount: Number(o.amount) || 0,
+    product: o.itemName || '',
+    gameName: o.gameName || '', // 接口仅返回 gameId，预留
+    clientType: Array.isArray(o.clientType) ? o.clientType : [], // 接口暂未返回，预留
+    spec: o.spec || '', // 接口仅返回 specId，预留
+    roleName: o.roleName || '', // 接口暂未返回，预留
+    orderStatus: STATUS_MAP[o.status] || o.status,
+    tags,
+    auditStatus: AUDIT_MAP[o.auditStatus] || 'none',
+    claimedCount: Number(o.takenCount) || 0,
+    requiredCount: Number(o.playerCount) || 0,
+    assignedPlayerCount: Number(o.assignedPlayerCount) || 0,
+    frozen,
+    afterSale,
+    partialRefunded,
+    assignService: o.ownerName || '', // 归属名 = 派单客服
+    clubAcceptTime: o.clubAcceptTime || '', // 接口暂未返回，预留
+    createTime: o.createTime || '', // 接口暂未返回，预留
+    teamCode: o.teamCode || '', // 接口暂未返回，预留
+    isDelta: false, // 接口未返回游戏类型，暂按非三角洲处理
+    deposit: {
+      targetW: 0,
+      reason: '',
+      firstW: 0,
+      secondW: 0,
+      note: o.depositNote || '', // 接口暂未返回，预留
+    },
+    players: Array.isArray(o.slots)
+      ? o.slots.map((s) => ({
+          name: '', // 接口未返回打手姓名，预留
+          id: s.playerId ?? '',
+          club: '', // 预留
+          acceptTime: '', // 预留
+          transferTime: '', // 预留
+        }))
+      : [],
+    profit: {
+      adjustText: clubAdjust ? `${clubAdjust > 0 ? '+' : ''}${clubAdjust.toFixed(2)}元` : '',
+      clubShare: actualAmount.toFixed(2),
+      playerShareText: '—', // 接口未返回分润明细，预留
+      adjustInvalid: partialRefunded,
+    },
+    logs: [], // 接口未返回订单日志，预留
+    vouchers: { first: [], last: [], process: [] }, // 接口未返回完成凭证，预留
+    voucherTime: '',
+    playerRemark: o.playerRemark || '', // 预留
+    rejectReason: o.rejectReason || '', // 预留
+    orderRemark: o.orderRemark || '', // 预留
+    relation: { main: o.orderNo || '', subs: [o.orderNo || ''] }, // 由 buildRelation 聚类覆盖
+    isMain: false, // 由 buildRelation 聚类覆盖
+  };
+}
+
+/* ===== 主/子订单与查看关系 =====
+ * 接口未返回关系字段，按订单号聚类推断：同订单号多于一个时，
+ * 第一个为主订单（审核列展示「主订单 查看关系」），其余为子订单；
+ * 订单号唯一时视为无主/子概念，审核列正常展示状态文字。
+ */
+function buildRelation(list) {
+  const groups = new Map();
+  list.forEach((row) => {
+    const key = String(row.orderNo || '');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+  return list.map((row) => {
+    const group = groups.get(String(row.orderNo || '')) || [row];
+    const isMain = group.length > 1 && group[0].id === row.id;
+    return {
+      ...row,
+      isMain,
+      relation: { main: group[0].orderNo, subs: group.map((g) => g.orderNo) },
+    };
+  });
+}
+
 const filteredRows = computed(() =>
-  orderStore.myOrders.filter((row) => {
+  orders.value.filter((row) => {
     const noMatch = !filter.orderNo || row.orderNo.includes(String(filter.orderNo).trim());
     const statusMatch = !filter.status || row.orderStatus === filter.status;
     let timeMatch = true;
     if (Array.isArray(filter.acceptTimeRange) && filter.acceptTimeRange.length === 2 && filter.acceptTimeRange[0]) {
       const start = new Date(String(filter.acceptTimeRange[0]).replace(/-/g, '/')).getTime();
       const end = new Date(String(filter.acceptTimeRange[1]).replace(/-/g, '/')).getTime() + 24 * 3600 * 1000 - 1000;
-      const t = new Date(row.clubAcceptTime.replace(/-/g, '/')).getTime();
+      // 接口暂未返回接单时间时，时间筛选对该行不生效（字段补齐后自动恢复）
+      const t = row.clubAcceptTime ? new Date(String(row.clubAcceptTime).replace(/-/g, '/')).getTime() : NaN;
       timeMatch = t >= start && t <= end;
     }
     return noMatch && statusMatch && timeMatch;
@@ -112,14 +229,38 @@ const rows = computed(() => {
   return filteredRows.value.slice(start, start + pageSize.value);
 });
 
+/* ===== 拉取我的订单列表（无 Query 参数，返回订单数组） ===== */
+async function loadOrders() {
+  loading.value = true;
+  try {
+    const list = await clubOrderApi.myOrders();
+    orders.value = Array.isArray(list) ? buildRelation(list.map(mapOrder)) : [];
+    loadedOnce.value = true;
+    applyOrderNoFromUrl();
+  } catch {
+    // 错误提示已由 request.js 统一 toast
+    orders.value = [];
+  } finally {
+    loading.value = false;
+  }
+}
+
 /* ================= 操作按钮显隐规则 ================= */
 const hasAbnormalTag = (row) => row.tags.includes('冻结') || row.tags.includes('售后中');
-// 加减价：主订单 + 待接单 + 未转单 + 无冻结/售后/部分退款
+// 加减价：待接单 + 未指派打手（转单等价） + 无冻结/售后/部分退款
 const canAdjust = (row) =>
-  row.isMain && row.orderStatus === 'pending' && !row.transferred && !hasAbnormalTag(row) && !row.tags.includes('部分退款');
-// 转单：进行中 + 无冻结/售后标签 + 未审核驳回
+  row.orderStatus === 'pending' &&
+  row.assignedPlayerCount === 0 &&
+  !hasAbnormalTag(row) &&
+  !row.partialRefunded;
+// 转单（按名额指派打手）：进行中 + 无冻结/售后标签 + 未审核驳回
 const canTransfer = (row) =>
   row.orderStatus === 'processing' && !hasAbnormalTag(row) && row.auditStatus !== 'rejected';
+// 提交验收：进行中 + 无冻结/售后 + 审核未提交或已驳回（可重新提交）
+const canSubmit = (row) =>
+  row.orderStatus === 'processing' &&
+  !hasAbnormalTag(row) &&
+  (row.auditStatus === 'none' || row.auditStatus === 'rejected');
 
 /* ================= 复制订单号 ================= */
 async function copyText(text) {
@@ -140,10 +281,23 @@ async function copyText(text) {
 /* ================= 详情弹窗 ================= */
 const detailVisible = ref(false);
 const currentRow = ref(null);
+const detailLoading = ref(false);
 
 function openDetail(row) {
-  currentRow.value = row;
-  detailVisible.value = true;
+  if (detailLoading.value) return;
+  detailLoading.value = true;
+  clubOrderApi
+    .detail(row.id)
+    .then((data) => {
+      currentRow.value = mapOrder(data);
+      detailVisible.value = true;
+    })
+    .catch(() => {
+      // 后端错误（如订单不存在）已由 request.js toast
+    })
+    .finally(() => {
+      detailLoading.value = false;
+    });
 }
 
 /* ===== 详情弹窗各区块显隐判断（对照字段说明表） ===== */
@@ -164,6 +318,7 @@ const hasVouchers = computed(() => {
 
 /* ================= 加减价弹窗 ================= */
 const adjustVisible = ref(false);
+const adjustSubmitting = ref(false);
 const adjustForm = reactive({ type: 'add', amount: '' });
 
 function openAdjust(row) {
@@ -172,7 +327,7 @@ function openAdjust(row) {
   adjustForm.amount = '';
   adjustVisible.value = true;
 }
-function confirmAdjust() {
+async function confirmAdjust() {
   const amt = Number(adjustForm.amount);
   if (!adjustForm.amount || Number.isNaN(amt) || amt <= 0) {
     show('请输入正确的金额', 'warning');
@@ -182,12 +337,26 @@ function confirmAdjust() {
     show('金额最多保留两位小数', 'warning');
     return;
   }
-  adjustVisible.value = false;
-  show(`${adjustForm.type === 'add' ? '加价' : '减价'} ¥${amt.toFixed(2)} 已提交`, 'success');
+  if (adjustSubmitting.value) return;
+  adjustSubmitting.value = true;
+  try {
+    await clubOrderApi.clubAdjust(currentRow.value.id, {
+      direction: adjustForm.type === 'add' ? 'INCREASE' : 'DECREASE',
+      amount: amt,
+    });
+    adjustVisible.value = false;
+    show(`${adjustForm.type === 'add' ? '加价' : '减价'} ¥${amt.toFixed(2)} 已提交`, 'success');
+    await loadOrders();
+  } catch {
+    // 后端错误已由 request.js toast
+  } finally {
+    adjustSubmitting.value = false;
+  }
 }
 
-/* ================= 转单弹窗 ================= */
+/* ================= 转单弹窗（按名额指派打手） ================= */
 const transferVisible = ref(false);
+const transferSubmitting = ref(false);
 const transferForm = reactive({ player1: '', player2: '' });
 
 function openTransfer(row) {
@@ -196,7 +365,7 @@ function openTransfer(row) {
   transferForm.player2 = '';
   transferVisible.value = true;
 }
-function confirmTransfer() {
+async function confirmTransfer() {
   if (!transferForm.player1) {
     show('请选择打手1', 'warning');
     return;
@@ -205,8 +374,47 @@ function confirmTransfer() {
     show('请选择打手2', 'warning');
     return;
   }
-  transferVisible.value = false;
-  show('转单成功，打手默认接受', 'success');
+  if (transferSubmitting.value) return;
+  transferSubmitting.value = true;
+  try {
+    const slots = [{ slotNo: 1, playerId: Number(transferForm.player1) }];
+    if (transferForm.player2) {
+      slots.push({ slotNo: 2, playerId: Number(transferForm.player2) });
+    }
+    await clubOrderApi.assign(currentRow.value.id, slots);
+    transferVisible.value = false;
+    show('转单成功，打手默认接受', 'success');
+    await loadOrders();
+  } catch {
+    // 后端错误已由 request.js toast
+  } finally {
+    transferSubmitting.value = false;
+  }
+}
+
+/* ================= 提交验收弹窗 ================= */
+const submitVisible = ref(false);
+const submitSubmitting = ref(false);
+const submitRemark = ref('');
+
+function openSubmit(row) {
+  currentRow.value = row;
+  submitRemark.value = '';
+  submitVisible.value = true;
+}
+async function confirmSubmit() {
+  if (submitSubmitting.value) return;
+  submitSubmitting.value = true;
+  try {
+    await clubOrderApi.submit(currentRow.value.id, submitRemark.value.trim());
+    submitVisible.value = false;
+    show('验收已提交', 'success');
+    await loadOrders();
+  } catch {
+    // 后端错误已由 request.js toast
+  } finally {
+    submitSubmitting.value = false;
+  }
 }
 
 /* ================= 查看关系弹窗 ================= */
@@ -231,7 +439,7 @@ function openRelation(row) {
     />
 
     <!-- 订单表格 -->
-    <DataTable :columns="columns" :data="rows" :total="total" :page="page" :page-size="pageSize" @page-change="(p) => (page = p)">
+    <DataTable v-loading="loading" :columns="columns" :data="rows" :total="total" :page="page" :page-size="pageSize" @page-change="(p) => (page = p)">
       <!-- 订单号：复制图标 + 悬浮下单用户 -->
       <template #cell-orderNo="{ row }">
         <el-tooltip v-if="row.customerTip" :content="row.customerTip" placement="top">
@@ -265,7 +473,7 @@ function openRelation(row) {
       <template #cell-orderStatus="{ row }">
         <div class="status-cell">
           <span class="order-status" :class="`os-${row.orderStatus}`">
-            {{ STATUS_TEXT[row.orderStatus] }}<template v-if="row.orderStatus === 'pending'">({{ row.claimedCount }}/{{ row.requiredCount }})</template>
+            {{ STATUS_TEXT[row.orderStatus] || row.orderStatus }}<template v-if="row.orderStatus === 'pending'">({{ row.claimedCount }}/{{ row.requiredCount }})</template>
           </span>
           <span v-for="t in row.tags" :key="t" class="status-tag" :class="`tag-${t}`">{{ t }}</span>
         </div>
@@ -288,6 +496,7 @@ function openRelation(row) {
           <a class="op-link" @click="openDetail(row)">查看</a>
           <a v-if="canAdjust(row)" class="op-link" @click="openAdjust(row)">加减价</a>
           <a v-if="canTransfer(row)" class="op-link" @click="openTransfer(row)">转单</a>
+          <a v-if="canSubmit(row)" class="op-link" @click="openSubmit(row)">提交验收</a>
         </div>
       </template>
     </DataTable>
@@ -308,7 +517,7 @@ function openRelation(row) {
             <div class="info-item"><label>游戏规格</label><span>{{ currentRow.spec || '—' }}</span></div>
             <div class="info-item"><label>购买项目</label><span>{{ currentRow.product }}</span></div>
             <div class="info-item"><label>客户端</label><span>{{ currentRow.clientType.join('、') }}</span></div>
-            <div class="info-item"><label>订单状态</label><span>{{ STATUS_TEXT[currentRow.orderStatus] }}</span></div>
+            <div class="info-item"><label>订单状态</label><span>{{ STATUS_TEXT[currentRow.orderStatus] || currentRow.orderStatus }}</span></div>
             <div class="info-item"><label>打手人数</label><span>{{ currentRow.claimedCount }}/{{ currentRow.requiredCount }}</span></div>
             <div class="info-item"><label>角色名</label><span>{{ currentRow.roleName }}</span></div>
             <!-- 组队码：无则不展示 -->
@@ -429,7 +638,7 @@ function openRelation(row) {
         <!-- <p class="form-tip">加：最多为俱乐部真实收益值；减：最多为打手真实收益值；仅支持输入正数，最多保留两位小数</p> -->
       </el-form>
       <template #footer>
-        <button class="btn btn-primary" type="button" @click="confirmAdjust">确定</button>
+        <button class="btn btn-primary" type="button" :disabled="adjustSubmitting" @click="confirmAdjust">{{ adjustSubmitting ? '提交中…' : '确定' }}</button>
         <button class="btn btn-plain" type="button" @click="adjustVisible = false">取消</button>
       </template>
     </AppModal>
@@ -453,8 +662,31 @@ function openRelation(row) {
         <p class="form-tip">即可选择旗下打手，转完后打手默认接受</p>
       </el-form>
       <template #footer>
-        <button class="btn btn-primary" type="button" @click="confirmTransfer">确定</button>
+        <button class="btn btn-primary" type="button" :disabled="transferSubmitting" @click="confirmTransfer">{{ transferSubmitting ? '提交中…' : '确定' }}</button>
         <button class="btn btn-plain" type="button" @click="transferVisible = false">取消</button>
+      </template>
+    </AppModal>
+
+    <!-- ================= 提交验收弹窗 ================= -->
+    <AppModal v-model="submitVisible" title="提交验收" width="420px">
+      <el-form label-position="top">
+        <el-form-item label="订单号">
+          <span class="plain-text">{{ currentRow?.orderNo }}</span>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="submitRemark"
+            type="textarea"
+            :rows="3"
+            maxlength="200"
+            show-word-limit
+            placeholder="请输入验收备注（可选）"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <button class="btn btn-primary" type="button" :disabled="submitSubmitting" @click="confirmSubmit">{{ submitSubmitting ? '提交中…' : '确定' }}</button>
+        <button class="btn btn-plain" type="button" @click="submitVisible = false">取消</button>
       </template>
     </AppModal>
 

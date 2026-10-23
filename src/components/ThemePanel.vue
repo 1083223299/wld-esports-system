@@ -1,13 +1,21 @@
 <script setup>
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useThemeStore } from '../stores/theme';
 import { themes } from '../theme/themes';
 
 const themeStore = useThemeStore();
 const open = ref(false);
 
+/** 色板仅展示真实主题，跟随系统单独作为开关 */
+const paletteThemes = computed(() => themes.filter((t) => t.id !== 'system'));
+
 function pick(id) {
   themeStore.apply(id);
+}
+
+/** 跟随系统开关：开启走 system；关闭沿用当前解析到的真实主题，界面不跳变 */
+function toggleSystem(val) {
+  themeStore.apply(val ? 'system' : themeStore.resolvedId);
 }
 </script>
 
@@ -43,58 +51,57 @@ function pick(id) {
     <transition name="theme-pop">
       <div v-if="open" class="theme-panel" role="dialog" aria-label="主题换肤">
         <div class="panel-head">
-          <div>
-            <div class="panel-title">主题换肤</div>
-            <div class="panel-sub">THEME CENTER · 一键切换全局视觉</div>
-          </div>
+          <div class="panel-title">主题换肤</div>
           <span class="panel-mode" :class="themeStore.isDark ? 'dark' : 'light'">
             {{ themeStore.isDark ? '暗色' : '亮色' }}
           </span>
         </div>
 
-        <div class="theme-grid">
+        <div class="system-row">
+          <span class="system-label">跟随系统</span>
+          <el-switch
+            class="system-switch"
+            :model-value="themeStore.isSystem"
+            aria-label="跟随系统"
+            @change="toggleSystem"
+          />
+        </div>
+
+        <div class="swatch-grid">
           <button
-            v-for="t in themes"
+            v-for="t in paletteThemes"
             :key="t.id"
-            class="theme-card"
-            :class="{ active: t.id === themeStore.name, wide: t.id === 'system' }"
+            class="swatch"
+            :class="{ active: t.id === themeStore.resolvedId }"
             type="button"
+            :title="t.name"
+            :aria-label="t.name"
             @click="pick(t.id)"
           >
-            <span class="preview" :style="{ background: t.preview.page }">
-              <span class="pv-sidebar" :style="{ background: t.preview.sidebar }">
-                <span class="pv-logo" :style="{ background: t.preview.primary }"></span>
-              </span>
-              <span class="pv-main">
-                <span class="pv-bar" :style="{ background: t.preview.card }"></span>
-                <span class="pv-body">
-                  <span class="pv-btn" :style="{ background: t.preview.gradient }"></span>
-                </span>
-              </span>
-              <span v-if="t.id === themeStore.name" class="pv-check">✓</span>
-              <span v-if="t.id === 'system'" class="pv-auto">
-                <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
-                  <path
-                    d="M12 3v2m0 14v2M5.6 5.6l1.4 1.4m10 10l1.4 1.4M3 12h2m14 0h2M5.6 18.4l1.4-1.4m10-10l1.4-1.4"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    fill="none"
-                  />
-                  <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.5" fill="none" />
-                </svg>
-                自动
-              </span>
-            </span>
-            <span class="theme-meta">
-              <span class="theme-name">{{ t.name }}</span>
-              <span class="theme-sub">{{ t.subtitle }}</span>
+            <span class="swatch-fill" :style="{ background: t.swatch }">
+              <svg
+                v-if="t.id === themeStore.resolvedId"
+                class="swatch-check"
+                viewBox="0 0 12 12"
+                width="12"
+                height="12"
+                aria-hidden="true"
+              >
+                <path
+                  d="M2.5 6.5 5 9l4.5-5.5"
+                  stroke="#ffffff"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  fill="none"
+                />
+              </svg>
             </span>
           </button>
         </div>
 
         <div class="panel-foot">
-          <span class="foot-tip">✦ 选择后即时生效，自动记忆</span>
+          <span class="foot-tip">选择后即时生效，自动记忆</span>
         </div>
       </div>
     </transition>
@@ -153,38 +160,31 @@ function pick(id) {
   position: absolute;
   top: calc(100% + 12px);
   right: -4px;
-  width: 358px;
-  padding: 16px;
+  width: 230px;
+  padding: 14px 16px;
   z-index: 61;
   background: var(--panel-glass);
   -webkit-backdrop-filter: blur(20px);
   backdrop-filter: blur(20px);
   border: 1px solid var(--border-soft);
-  border-radius: 18px;
+  border-radius: 14px;
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   text-align: left;
 }
 
 .panel-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
 }
 .panel-title {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--text-main);
-  letter-spacing: 0.02em;
-}
-.panel-sub {
-  margin-top: 3px;
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  color: var(--text-faint);
 }
 .panel-mode {
-  font-size: 11px;
-  padding: 3px 10px;
+  font-size: 10px;
+  padding: 2px 8px;
   border-radius: 999px;
   font-weight: 600;
 }
@@ -197,131 +197,55 @@ function pick(id) {
   color: var(--text-invert);
 }
 
-/* ---- 主题卡片 ---- */
-.theme-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 8px;
-  margin-top: 14px;
-}
-.theme-card.wide {
-  grid-column: 1 / -1;
-}
-.theme-card {
-  padding: 5px 5px 7px;
-  border: 1px solid var(--border-soft);
-  border-radius: 13px;
-  background: transparent;
-  cursor: pointer;
-  text-align: center;
-  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
-}
-.theme-card:hover {
-  transform: translateY(-2px);
-  border-color: var(--primary-border-strong);
-  box-shadow: 0 8px 16px var(--primary-glow);
-}
-.theme-card.active {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 1px var(--primary), 0 8px 18px var(--primary-glow);
-}
-
-.preview {
-  position: relative;
+/* ---- 跟随系统开关行 ---- */
+.system-row {
   display: flex;
-  height: 62px;
-  border-radius: 9px;
-  overflow: hidden;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-}
-.pv-sidebar {
-  width: 32%;
-  display: flex;
-  justify-content: center;
-  padding-top: 8px;
-}
-.pv-logo {
-  width: 9px;
-  height: 9px;
-  border-radius: 3px;
-}
-.pv-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  padding: 6px;
-  gap: 4px;
-}
-.pv-bar {
-  height: 7px;
-  border-radius: 4px;
-  opacity: 0.95;
-}
-.pv-body {
-  flex: 1;
-  display: flex;
-  align-items: flex-end;
-  justify-content: flex-end;
-}
-.pv-btn {
-  width: 24px;
-  height: 9px;
-  border-radius: 5px;
-}
-.pv-check {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background: var(--primary);
-  color: var(--text-invert);
-  font-size: 9px;
-  line-height: 1;
-  display: grid;
-  place-items: center;
-}
-
-.pv-auto {
-  position: absolute;
-  bottom: 4px;
-  left: 6px;
-  display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 9px;
-  font-weight: 600;
-  color: var(--text-sub);
-  background: var(--bg-elevated);
-  padding: 2px 6px;
-  border-radius: 999px;
-  opacity: 0.9;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-soft);
 }
-
-.theme-card.wide .theme-meta {
-  flex-direction: row;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.theme-card.wide .theme-sub {
-  font-size: 10px;
-}
-
-.theme-meta {
-  display: flex;
-  flex-direction: column;
-  margin-top: 6px;
-}
-.theme-name {
-  font-size: 11px;
-  font-weight: 600;
+.system-label {
+  font-size: 12px;
   color: var(--text-main);
 }
-.theme-sub {
-  font-size: 9px;
-  color: var(--text-faint);
+
+/* ---- 色板 ---- */
+.swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin-top: 14px;
+}
+.swatch {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.18s ease;
+}
+.swatch-fill {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--border-soft);
+  transition: transform 0.18s ease;
+}
+.swatch:hover .swatch-fill {
+  transform: scale(1.12);
+}
+.swatch:active .swatch-fill {
+  transform: scale(0.98);
+}
+.swatch-check {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
 }
 
 /* ---- 底部提示 ---- */
