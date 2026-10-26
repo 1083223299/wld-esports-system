@@ -4,6 +4,7 @@ import AppModal from '../../../components/AppModal.vue';
 import DataTable from '../../../components/DataTable.vue';
 import { useToast } from '../../../composables/useToast';
 import { walletApi } from '../../../api/modules/wallet';
+import { clubAccountApi } from '../../../api/modules/clubAccount';
 import { WITHDRAW_RULES, FLOW_TYPE_TEXT } from './mockData';
 
 /**
@@ -12,9 +13,63 @@ import { WITHDRAW_RULES, FLOW_TYPE_TEXT } from './mockData';
  * - GET  /api/club/wallets/txns         钱包明细流水（服务端分页 / walletType 筛选）
  * - POST /api/club/wallets/withdraw     提现（幂等 requestId，PROCESSING 异步回查）
  * - GET  /api/club/wallets/withdrawals  提现单状态
+ * - GET  /api/club/me                   当前用户（realNameVerified 实名状态）
+ * - POST /api/club/me/real-name         实名认证（提现前置，未实名引导认证）
  * 说明：收款信息接口未下发，前端本地持久化；当天提交次数后端未下发，前端按天计数。
  */
 const { show } = useToast();
+
+/* ================= 实名状态（GET /api/club/me） ================= */
+const realNameVerified = ref(false);
+const loadingAccount = ref(false);
+
+async function loadAccount() {
+  loadingAccount.value = true;
+  try {
+    const me = await clubAccountApi.me();
+    realNameVerified.value = !!me?.realNameVerified;
+  } catch {
+    // 错误提示已由 request.js 统一 toast
+  } finally {
+    loadingAccount.value = false;
+  }
+}
+
+/* ================= 实名认证弹窗（POST /api/club/me/real-name） ================= */
+const realNameVisible = ref(false);
+const realNameSubmitting = ref(false);
+const realNameForm = reactive({ realName: '', idNo: '' });
+
+function openRealName() {
+  realNameForm.realName = '';
+  realNameForm.idNo = '';
+  realNameVisible.value = true;
+}
+
+async function confirmRealName() {
+  const name = realNameForm.realName.trim();
+  const idNo = realNameForm.idNo.trim();
+  if (name.length < 2 || name.length > 32) {
+    show('真实姓名需为2-32个字', 'warning');
+    return;
+  }
+  if (!/^\d{17}[\dXx]$/.test(idNo)) {
+    show('请输入正确的18位身份证号', 'warning');
+    return;
+  }
+  if (realNameSubmitting.value) return;
+  realNameSubmitting.value = true;
+  try {
+    await clubAccountApi.realName({ realName: name, idNo });
+    realNameVerified.value = true;
+    realNameVisible.value = false;
+    show('实名认证成功', 'success');
+  } catch {
+    // 后端错误（如 CONFLICT 已完成实名 / 身份证校验失败）已由 request.js toast
+  } finally {
+    realNameSubmitting.value = false;
+  }
+}
 
 /* ================= 钱包余额（GET /api/club/wallets/me） ================= */
 const wallet = reactive({ income: 0, deposit: 0, walletFrozen: false });
@@ -33,6 +88,37 @@ async function loadWallet() {
     // 错误提示已由 request.js 统一 toast
   } finally {
     loadingWallet.value = false;
+  }
+}
+
+/* ================= 提现规则（GET /api/club/wallets/withdraw-rules?walletType=INCOME，后端下发） =================
+ * 后端口径（2026-10-23）：字段 dailyLimit/usedToday/remainToday/windowStart/windowEnd/inWindow/minAmount/…
+ * 收益 minAmount=90、showWithdraw=true；inWindow 为后端算好的"当前是否在可提现时间段"
+ */
+const rules = reactive({
+  dailyLimit: WITHDRAW_RULES.dailyMaxTimes,
+  remainToday: null, // 后端剩余次数（null=未拉取，回退本地 dailyLimit-usedToday）
+  inWindow: null, // 后端当前是否在可提现时间段（null=未拉取，回退本地解析 windowStart/windowEnd）
+  windowStart: '08:00',
+  windowEnd: '18:00',
+  minAmount: WITHDRAW_RULES.minAmount,
+});
+
+async function loadWithdrawRules() {
+  try {
+    const r = await walletApi.withdrawRules('INCOME');
+    if (r && typeof r === 'object') {
+      if (Number.isFinite(Number(r.dailyLimit))) rules.dailyLimit = Number(r.dailyLimit);
+      if (r.remainToday !== undefined && r.remainToday !== null) {
+        rules.remainToday = Number(r.remainToday);
+      }
+      if (typeof r.inWindow === 'boolean') rules.inWindow = r.inWindow;
+      if (Number.isFinite(Number(r.minAmount))) rules.minAmount = Number(r.minAmount);
+      if (r.windowStart !== undefined && r.windowStart !== null) rules.windowStart = String(r.windowStart);
+      if (r.windowEnd !== undefined && r.windowEnd !== null) rules.windowEnd = String(r.windowEnd);
+    }
+  } catch {
+    // 拉取失败保留本地默认规则（后端提现接口仍会最终校验）
   }
 }
 
@@ -65,17 +151,33 @@ const submittedToday = ref(
   Number(localStorage.getItem(`club_wallet_withdraw_count_${todayKey()}`)) || 0,
 );
 
-const remainTimes = computed(() =>
-  Math.max(0, WITHDRAW_RULES.dailyMaxTimes - submittedToday.value),
-);
+const remainTimes = computed(() => {
+  if (rules.remainToday !== null && rules.remainToday !== undefined) {
+    return Math.max(0, rules.remainToday);
+  }
+  return Math.max(0, rules.dailyLimit - submittedToday.value);
+});
 
 function markSubmitted() {
   submittedToday.value += 1;
   localStorage.setItem(`club_wallet_withdraw_count_${todayKey()}`, String(submittedToday.value));
 }
 
-/* ================= 钱包明细（服务端分页，walletType 服务端筛选） ================= */
-const filter = reactive({ walletType: '' });
+/* ================= 钱包明细（服务端分页，walletType 服务端筛选） =================
+ * 筛选对齐原型：类型 + 时间（开始~结束），无确认按钮（选择即筛选）；
+ * 时间选择器对齐打手列表（daterange + 今天/最近7天/最近30天 快捷项）；
+ * 时间参数按 createdFrom/createdTo 透传（后端已确认将补此参数）
+ */
+const filter = reactive({ walletType: '', timeRange: [] });
+
+/** 时间快捷项（与打手列表一致） */
+const TIME_SHORTCUTS = [
+  { text: '今天', value: () => { const d = new Date(); return [d, d]; } },
+  { text: '最近7天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 6); return [start, end]; } },
+  { text: '最近30天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 29); return [start, end]; } },
+];
+/** 流水时间不能选未来 */
+const disableFutureDate = (time) => time.getTime() > Date.now();
 const WALLET_TYPE_OPTIONS = [
   { label: '全部', value: '' },
   { label: '收益', value: 'INCOME' },
@@ -113,6 +215,8 @@ async function loadTxns() {
   try {
     const data = await walletApi.txns({
       walletType: filter.walletType,
+      createdFrom: Array.isArray(filter.timeRange) ? filter.timeRange[0] : '',
+      createdTo: Array.isArray(filter.timeRange) ? filter.timeRange[1] : '',
       page: page.value,
       pageSize: pageSize.value,
     });
@@ -139,6 +243,7 @@ function handleSearch() {
 
 function handleReset() {
   filter.walletType = '';
+  filter.timeRange = [];
   handleSearch();
 }
 
@@ -167,10 +272,19 @@ function fillAllAmount() {
   withdrawForm.amount = withdrawableBalance.value.toFixed(2);
 }
 
-// 当前是否在可提现时间段内
+// 当前是否在可提现时间段内：优先用后端 inWindow，缺失时按 windowStart/windowEnd 本地解析
 function isInWithdrawTime() {
-  const h = new Date().getHours();
-  return h >= WITHDRAW_RULES.availableHourStart && h < WITHDRAW_RULES.availableHourEnd;
+  if (rules.inWindow !== null && rules.inWindow !== undefined) return rules.inWindow;
+  const now = new Date();
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const [sh, sm] = String(rules.windowStart).split(':').map(Number);
+  const [eh, em] = String(rules.windowEnd).split(':').map(Number);
+  if (Number.isFinite(sh) && Number.isFinite(eh)) {
+    const s = sh * 60 + (Number.isFinite(sm) ? sm : 0);
+    const e = eh * 60 + (Number.isFinite(em) ? em : 0);
+    return cur >= s && cur < e;
+  }
+  return true;
 }
 
 /* ---- 错误提示弹窗（"我知道了"） ---- */
@@ -185,7 +299,13 @@ function showError(msg) {
 const confirmVisible = ref(false);
 
 function handleSubmitWithdraw() {
-  // 0. 收款信息完整性
+  // 0. 实名认证（提现前置：未实名引导认证，对应 /api/club/me/real-name）
+  if (!realNameVerified.value) {
+    showError('提现前请先完成实名认证');
+    openRealName();
+    return;
+  }
+  // 1. 收款信息完整性
   if (!payInfo.alipayAccount.trim() || !payInfo.alipayName.trim()) {
     showError('请先完善支付宝账号与实名信息');
     return;
@@ -215,14 +335,11 @@ function handleSubmitWithdraw() {
     show('金额最多保留两位小数', 'warning');
     return;
   }
-  if (amt < WITHDRAW_RULES.minAmount) {
+  if (amt < rules.minAmount) {
     showError('提现金额需≥90元');
     return;
   }
-  if (amt > withdrawableBalance.value) {
-    show('提现金额不能超过可提现余额', 'warning');
-    return;
-  }
+  // 原型批注③「支持将账号余额扣为负数」：不限制提现额 ≤ 余额
   // 通过校验 → 二次确认
   confirmVisible.value = true;
 }
@@ -310,6 +427,8 @@ function saveAlipay() {
 }
 
 onMounted(() => {
+  loadAccount();
+  loadWithdrawRules();
   loadWallet();
   loadTxns();
 });
@@ -328,13 +447,27 @@ onMounted(() => {
     <div class="flow-panel">
       <h3 class="panel-title">钱包明细</h3>
 
-      <!-- 筛选行 -->
+      <!-- 筛选行（对齐原型：类型 + 时间开始~结束；原型无确认按钮，选择即筛选） -->
       <div class="filter-row">
         <div class="filter-item">
           <label class="filter-label">类型</label>
           <el-select v-model="filter.walletType" placeholder="请选择" style="width: 180px" @change="handleSearch">
             <el-option v-for="opt in WALLET_TYPE_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
+        </div>
+        <div class="filter-item">
+          <label class="filter-label">时间</label>
+          <el-date-picker
+            v-model="filter.timeRange"
+            type="daterange"
+            start-placeholder="开始时间"
+            end-placeholder="结束时间"
+            value-format="YYYY-MM-DD"
+            :shortcuts="TIME_SHORTCUTS"
+            :disabled-date="disableFutureDate"
+            style="width: 260px"
+            @change="handleSearch"
+          />
         </div>
         <el-button class="filter-reset-btn" @click="handleReset">重置</el-button>
       </div>
@@ -398,9 +531,9 @@ onMounted(() => {
         <div class="rules-box">
           <p class="rules-title">提现条件：</p>
           <ol class="rules-list">
-            <li>一天内，提交此时上限{{ WITHDRAW_RULES.dailyMaxTimes }}次</li>
-            <li>可提现时间段：每日{{ String(WITHDRAW_RULES.availableHourStart).padStart(2, '0') }}:00-{{ String(WITHDRAW_RULES.availableHourEnd).padStart(2, '0') }}:00</li>
-            <li>提现金额需≥{{ WITHDRAW_RULES.minAmount }}元</li>
+            <li>一天内，提交次数上限{{ rules.dailyLimit }}次</li>
+            <li>可提现时间段：每日 {{ rules.windowStart }}-{{ rules.windowEnd }}</li>
+            <li>提现金额需≥{{ rules.minAmount }}元</li>
           </ol>
         </div>
 
@@ -421,6 +554,27 @@ onMounted(() => {
         <button class="btn btn-plain" type="button" @click="confirmVisible = false">取消</button>
         <button class="btn btn-primary" type="button" :disabled="submitting" @click="confirmWithdraw">
           {{ submitting ? '提交中...' : '确定提现' }}
+        </button>
+      </template>
+    </AppModal>
+
+    <!-- ===== 实名认证弹窗（提现前置，POST /api/club/me/real-name） ===== -->
+    <AppModal v-model="realNameVisible" title="实名认证" width="420px">
+      <div class="real-name-form">
+        <div class="form-row form-row-block">
+          <span class="form-label">真实姓名</span>
+          <el-input v-model="realNameForm.realName" placeholder="请输入真实姓名（2-32个字）" maxlength="32" />
+        </div>
+        <div class="form-row form-row-block">
+          <span class="form-label">身份证号</span>
+          <el-input v-model="realNameForm.idNo" placeholder="请输入18位身份证号" maxlength="18" />
+        </div>
+        <!-- <p class="real-name-tip">实名认证仅校验身份证格式，通过后即可提现；已认证后不可修改。</p> -->
+      </div>
+      <template #footer>
+        <button class="btn btn-plain" type="button" @click="realNameVisible = false">取消</button>
+        <button class="btn btn-primary" type="button" :disabled="realNameSubmitting" @click="confirmRealName">
+          {{ realNameSubmitting ? '提交中...' : '提交认证' }}
         </button>
       </template>
     </AppModal>
@@ -697,6 +851,20 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* ===== 实名认证弹窗 ===== */
+.real-name-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.real-name-tip {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-sub);
+  line-height: 1.6;
 }
 
 /* ===== 通用按钮（弹窗 footer） ===== */

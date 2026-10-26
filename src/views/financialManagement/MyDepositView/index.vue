@@ -1,10 +1,10 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue';
-import { ElMessageBox } from 'element-plus';
 import AppModal from '../../../components/AppModal.vue';
 import DataTable from '../../../components/DataTable.vue';
 import { useToast } from '../../../composables/useToast';
 import { walletApi } from '../../../api/modules/wallet';
+import { clubAccountApi } from '../../../api/modules/clubAccount';
 import {
   DEPOSIT_FLOW_TYPE_OPTIONS,
   FLOW_TYPE_TEXT,
@@ -36,10 +36,20 @@ const account = reactive({
   alipayName: localStorage.getItem(ALIPAY_NAME_KEY) || '张三',
   hasQuitStore: true, // 是否已退店（接口未返回，后端提现接口应最终校验）
   quitAt: '2026-09-20 10:00:00', // 退店时间（接口未返回）
-  isRealNameVerified: true, // 是否已实名（接口未返回）
+  isRealNameVerified: false, // 实名状态：由 GET /api/club/me 拉取（realNameVerified）
 });
 // 当日已提交次数（接口未返回，前端体验层计数，后端应最终校验）
 const submittedToday = ref(0);
+
+/* ================= 实名状态（GET /api/club/me） ================= */
+async function loadAccount() {
+  try {
+    const me = await clubAccountApi.me();
+    account.isRealNameVerified = !!me?.realNameVerified;
+  } catch {
+    // 错误已由 request.js 统一 toast，保持默认未实名
+  }
+}
 
 // 退店距今天数
 const daysSinceQuit = computed(() => {
@@ -48,13 +58,51 @@ const daysSinceQuit = computed(() => {
   return Math.floor((Date.now() - quitTime) / (24 * 3600 * 1000));
 });
 
-// 入口提现按钮展示条件：已退店满14天 && 钱包未冻结
-const canShowWithdrawBtn = computed(
+/* ================= 押金提现规则（GET /api/club/wallets/withdraw-rules?walletType=DEPOSIT） =================
+ * 后端口径（2026-10-23）：字段 dailyLimit/usedToday/remainToday/windowStart/windowEnd/inWindow/…/showWithdraw；
+ * 押金提现按钮看 showWithdraw：已退店满 14 天且钱包未冻结才为 true；押金无 90 元最低限制（收益才有）。
+ * 接口失败时回退本地计算。
+ */
+const depositRules = reactive({
+  dailyLimit: WITHDRAW_RULES.dailyMaxTimes,
+  remainToday: null,
+  inWindow: null,
+  windowStart: '08:00',
+  windowEnd: '18:00',
+  showWithdraw: false,
+});
+
+async function fetchDepositRules() {
+  try {
+    const r = await walletApi.withdrawRules('DEPOSIT');
+    if (r && typeof r === 'object') {
+      if (Number.isFinite(Number(r.dailyLimit))) depositRules.dailyLimit = Number(r.dailyLimit);
+      if (r.remainToday !== undefined && r.remainToday !== null) {
+        depositRules.remainToday = Number(r.remainToday);
+      }
+      if (typeof r.inWindow === 'boolean') depositRules.inWindow = r.inWindow;
+      if (r.windowStart !== undefined && r.windowStart !== null) depositRules.windowStart = String(r.windowStart);
+      if (r.windowEnd !== undefined && r.windowEnd !== null) depositRules.windowEnd = String(r.windowEnd);
+      if (typeof r.showWithdraw === 'boolean') depositRules.showWithdraw = r.showWithdraw;
+    }
+  } catch {
+    // 拉取失败：回退本地计算（已退店满14天 + 钱包未冻结）
+  }
+}
+
+// 本地兜底计算（接口失败时）
+const localCanWithdraw = computed(
   () =>
     account.hasQuitStore &&
     daysSinceQuit.value >= WITHDRAW_RULES.quitStoreRequiredDays &&
     !balance.value.walletFrozen,
 );
+
+// 入口提现按钮展示条件：优先接口 showWithdraw，失败回退本地计算
+const canShowWithdrawBtn = computed(() => {
+  if (depositRules.showWithdraw) return true;
+  return localCanWithdraw.value;
+});
 
 /* ================= 余额 / 流水拉取 ================= */
 async function fetchBalance() {
@@ -70,9 +118,6 @@ async function fetchBalance() {
   }
 }
 
-// 流水单页拉取条数（循环拉全量后前端筛选分页）
-const FLOW_FETCH_PAGE_SIZE = 100;
-
 /** 服务端流水 → 表格行 */
 function normalizeTxn(item) {
   return {
@@ -86,54 +131,75 @@ function normalizeTxn(item) {
   };
 }
 
-async function fetchFlowList() {
+/** 拉取押金明细（服务端筛选：类型 bizType + 时间 createdFrom/createdTo + 分页；条件变更即调用） */
+async function loadTxns() {
   loading.value = true;
   try {
-    const all = [];
-    let pageNo = 1;
-    let totalCount = Infinity;
-    // 接口未提供筛选参数，按 total 循环拉取全量
-    while (all.length < totalCount) {
-      const data = await walletApi.txns({
-        walletType: 'DEPOSIT',
-        page: pageNo,
-        pageSize: FLOW_FETCH_PAGE_SIZE,
-      });
-      const list = Array.isArray(data?.list) ? data.list : [];
-      totalCount = data?.total ?? all.length + list.length;
-      all.push(...list.map(normalizeTxn));
-      if (!list.length) break;
-      pageNo += 1;
-      if (pageNo > 200) break; // 防御：最多 2 万条，超出需改服务端分页
+    const data = await walletApi.txns({
+      walletType: 'DEPOSIT',
+      bizType: filter.type,
+      createdFrom: Array.isArray(filter.timeRange) ? filter.timeRange[0] : '',
+      createdTo: Array.isArray(filter.timeRange) ? filter.timeRange[1] : '',
+      page: page.value,
+      pageSize: pageSize.value,
+    });
+    total.value = Number(data?.total) || 0;
+    txns.value = Array.isArray(data?.list) ? data.list.map(normalizeTxn) : [];
+    // 当前页被删空时回退到第 1 页
+    if (txns.value.length === 0 && page.value > 1) {
+      page.value = 1;
+      await loadTxns();
+      return;
     }
-    allRows.value = all;
   } catch (e) {
     // request.js 已统一 toast，保留原数据
+    txns.value = [];
+    total.value = 0;
   } finally {
     loading.value = false;
   }
 }
 
 onMounted(() => {
+  loadAccount();
+  fetchDepositRules();
   fetchBalance();
-  fetchFlowList();
+  loadTxns();
 });
 
-/* ================= 押金明细筛选 ================= */
-const filter = reactive({
-  type: '',
-  startTime: '',
-  endTime: '',
-});
+/* ================= 押金明细（服务端筛选：类型/时间 选择即调接口） =================
+ * 2026-10-26：按用户要求由「本地筛全量」改为服务端筛选，与钱包页一致：
+ * 改任一筛选条件立即调 GET /api/club/wallets/txns（walletType=DEPOSIT + bizType + createdFrom/createdTo + 分页）
+ * 类型筛选参数名暂按 bizType 透传（txns 响应字段即 bizType），待后端确认
+ */
+const filter = reactive({ type: '', timeRange: [] });
 
-// 类型下拉选项（含"全部"；value 用展示文案，与表格行 typeText 匹配）
+/** 时间快捷项（与打手列表一致） */
+const TIME_SHORTCUTS = [
+  { text: '今天', value: () => { const d = new Date(); return [d, d]; } },
+  { text: '最近7天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 6); return [start, end]; } },
+  { text: '最近30天', value: () => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 29); return [start, end]; } },
+];
+/** 流水时间不能选未来 */
+const disableFutureDate = (time) => time.getTime() > Date.now();
+
+// 本地展示枚举 → 后端筛选枚举（txns 类型校验允许值：订单收入/提现成功/提现失败/平台扣除/转单扣除/余额抵扣/平台充值/充值；
+// 押金可用：充值/提现成功/提现失败/平台扣除/余额抵扣；接口校验提示即这些中文，按中文透传）
+const DEPOSIT_BIZ_TYPE = {
+  recharge: '充值',
+  withdraw_success: '提现成功',
+  platform_deduct: '平台扣除',
+  withdraw_fail: '提现失败',
+  balance_deduct: '余额抵扣',
+};
+
+// 类型下拉选项（含"全部"；value 用后端筛选枚举）
 const typeOptions = computed(() => [
   { label: '全部', value: '' },
-  ...DEPOSIT_FLOW_TYPE_OPTIONS.map((opt) => ({ ...opt, value: opt.label })),
+  ...DEPOSIT_FLOW_TYPE_OPTIONS.map((opt) => ({ ...opt, value: DEPOSIT_BIZ_TYPE[opt.value] || opt.value })),
 ]);
 
-/* ================= 押金明细表格 ================= */
-const allRows = ref([]);
+/* ================= 押金明细表格（服务端分页） ================= */
 const columns = [
   { key: 'typeText', title: '类型' },
   { key: 'amount', title: '金额（元）' },
@@ -142,34 +208,26 @@ const columns = [
   { key: 'time', title: '时间' },
 ];
 
+const txns = ref([]);
+const total = ref(0);
 const page = ref(1);
 const pageSize = ref(10);
 
-const filteredRows = computed(() =>
-  allRows.value.filter((row) => {
-    if (filter.type && row.typeText !== filter.type) return false;
-    const day = row.time.slice(0, 10);
-    if (filter.startTime && day < filter.startTime) return false;
-    if (filter.endTime && day > filter.endTime) return false;
-    return true;
-  }),
-);
-
-const total = computed(() => filteredRows.value.length);
-const rows = computed(() => {
-  const start = (page.value - 1) * pageSize.value;
-  return filteredRows.value.slice(start, start + pageSize.value);
-});
-
 function handleSearch() {
   page.value = 1;
+  loadTxns();
 }
 
 function handleReset() {
   filter.type = '';
-  filter.startTime = '';
-  filter.endTime = '';
+  filter.timeRange = [];
   page.value = 1;
+  loadTxns();
+}
+
+function handlePageChange(p) {
+  page.value = p;
+  loadTxns();
 }
 
 function formatAmount(val) {
@@ -183,24 +241,56 @@ const withdrawForm = reactive({ amount: '' });
 const withdrawing = ref(false);
 
 // 当天剩余可提交次数
-const remainTimes = computed(() =>
-  Math.max(0, WITHDRAW_RULES.dailyMaxTimes - submittedToday.value),
-);
+const remainTimes = computed(() => {
+  if (depositRules.remainToday !== null && depositRules.remainToday !== undefined) {
+    return Math.max(0, depositRules.remainToday);
+  }
+  return Math.max(0, depositRules.dailyLimit - submittedToday.value);
+});
+
+/* ================= 实名认证弹窗（POST /api/club/me/real-name） ================= */
+const realNameVisible = ref(false);
+const realNameSubmitting = ref(false);
+const realNameForm = reactive({ realName: '', idNo: '' });
+
+function openRealName() {
+  realNameForm.realName = '';
+  realNameForm.idNo = '';
+  realNameVisible.value = true;
+}
+
+async function confirmRealName() {
+  const name = realNameForm.realName.trim();
+  const idNo = realNameForm.idNo.trim();
+  if (name.length < 2 || name.length > 32) {
+    show('真实姓名需为2-32个字', 'warning');
+    return;
+  }
+  if (!/^\d{17}[\dXx]$/.test(idNo)) {
+    show('请输入正确的18位身份证号', 'warning');
+    return;
+  }
+  if (realNameSubmitting.value) return;
+  realNameSubmitting.value = true;
+  try {
+    await clubAccountApi.realName({ realName: name, idNo });
+    account.isRealNameVerified = true;
+    realNameVisible.value = false;
+    show('实名认证成功', 'success');
+  } catch {
+    // 后端错误（如 CONFLICT 已完成实名 / 身份证校验失败）已由 request.js toast
+  } finally {
+    realNameSubmitting.value = false;
+  }
+}
 
 /**
- * 点击入口「提现」：先判断实名，未实名引导去实名认证，再打开弹窗
+ * 点击入口「提现」：先判断实名，未实名弹实名认证，再打开弹窗
  */
 function openWithdrawModal() {
   if (!account.isRealNameVerified) {
-    ElMessageBox.confirm('您还未完成实名认证，提现前需先完成实名认证。是否前往认证？', '实名认证提醒', {
-      confirmButtonText: '去认证',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
-      .then(() => {
-        show('请前往个人中心完成实名认证', 'info');
-      })
-      .catch(() => {});
+    show('提现前请先完成实名认证', 'info');
+    openRealName();
     return;
   }
   withdrawForm.amount = '';
@@ -211,10 +301,21 @@ function fillAllAmount() {
   withdrawForm.amount = Number(balance.value.deposit).toFixed(2);
 }
 
-// 当前是否在可提现时间段内
+// 当前是否在可提现时间段内：优先用后端 inWindow，缺失时按 windowStart/windowEnd 本地解析
 function isInWithdrawTime() {
-  const h = new Date().getHours();
-  return h >= WITHDRAW_RULES.availableHourStart && h < WITHDRAW_RULES.availableHourEnd;
+  if (depositRules.inWindow !== null && depositRules.inWindow !== undefined) {
+    return depositRules.inWindow;
+  }
+  const now = new Date();
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const [sh, sm] = String(depositRules.windowStart).split(':').map(Number);
+  const [eh, em] = String(depositRules.windowEnd).split(':').map(Number);
+  if (Number.isFinite(sh) && Number.isFinite(eh)) {
+    const s = sh * 60 + (Number.isFinite(sm) ? sm : 0);
+    const e = eh * 60 + (Number.isFinite(em) ? em : 0);
+    return cur >= s && cur < e;
+  }
+  return true;
 }
 
 /* ---- 错误提示弹窗（"我知道了"） ---- */
@@ -229,6 +330,11 @@ function showError(msg) {
 const confirmVisible = ref(false);
 
 function handleSubmitWithdraw() {
+  // 0. 实名认证（提现前置，后端亦应校验）
+  if (!account.isRealNameVerified) {
+    showError('提现前请先完成实名认证');
+    return;
+  }
   // 1. 钱包冻结
   if (balance.value.walletFrozen) {
     showError('您的钱包已冻结，请联系客服咨询');
@@ -351,35 +457,29 @@ function saveAlipay() {
         <div class="filter-item">
           <label class="filter-label">时间</label>
           <el-date-picker
-            v-model="filter.startTime"
-            type="date"
-            placeholder="开始时间"
+            v-model="filter.timeRange"
+            type="daterange"
+            start-placeholder="开始时间"
+            end-placeholder="结束时间"
             value-format="YYYY-MM-DD"
-            style="width: 160px"
-            @change="handleSearch"
-          />
-          <span class="time-sep">—</span>
-          <el-date-picker
-            v-model="filter.endTime"
-            type="date"
-            placeholder="结束时间"
-            value-format="YYYY-MM-DD"
-            style="width: 160px"
+            :shortcuts="TIME_SHORTCUTS"
+            :disabled-date="disableFutureDate"
+            style="width: 260px"
             @change="handleSearch"
           />
           <el-button class="filter-reset-btn" @click="handleReset">重置</el-button>
         </div>
       </div>
 
-      <!-- 明细表格 -->
+      <!-- 明细表格（服务端分页；条件变更/翻页都会重新调接口） -->
       <DataTable
         v-loading="loading"
         :columns="columns"
-        :data="rows"
+        :data="txns"
         :total="total"
         :page="page"
         :page-size="pageSize"
-        @page-change="(p) => (page = p)"
+        @page-change="handlePageChange"
       >
         <template #cell-amount="{ row }">
           <span :class="['amount-text', row.amount >= 0 ? 'amount-in' : 'amount-out']">
@@ -429,8 +529,9 @@ function saveAlipay() {
         <div class="rules-box">
           <p class="rules-title">提现条件：</p>
           <ol class="rules-list">
-            <li>一天内，提交此时上限{{ WITHDRAW_RULES.dailyMaxTimes }}次</li>
-            <li>可提现时间段：每日{{ String(WITHDRAW_RULES.availableHourStart).padStart(2, '0') }}:00-{{ String(WITHDRAW_RULES.availableHourEnd).padStart(2, '0') }}:00</li>
+            <li>一天内，提交次数上限{{ depositRules.dailyLimit }}次</li>
+            <li>可提现时间段：每日 {{ depositRules.windowStart }}-{{ depositRules.windowEnd }}</li>
+            <li>需已退店满 14 天且钱包未冻结</li>
           </ol>
         </div>
 
@@ -458,6 +559,27 @@ function saveAlipay() {
       <p class="error-text">{{ errorMessage }}</p>
       <template #footer>
         <button class="btn btn-primary" type="button" @click="errorVisible = false">我知道了</button>
+      </template>
+    </AppModal>
+
+    <!-- ===== 实名认证弹窗（提现前置，POST /api/club/me/real-name） ===== -->
+    <AppModal v-model="realNameVisible" title="实名认证" width="420px">
+      <div class="real-name-form">
+        <div class="form-row form-row-block">
+          <span class="form-label">真实姓名</span>
+          <el-input v-model="realNameForm.realName" placeholder="请输入真实姓名（2-32个字）" maxlength="32" />
+        </div>
+        <div class="form-row form-row-block">
+          <span class="form-label">身份证号</span>
+          <el-input v-model="realNameForm.idNo" placeholder="请输入18位身份证号" maxlength="18" />
+        </div>
+        <!-- <p class="real-name-tip">实名认证仅校验身份证格式，通过后即可提现；已认证后不可修改。</p> -->
+      </div>
+      <template #footer>
+        <button class="btn btn-plain" type="button" @click="realNameVisible = false">取消</button>
+        <button class="btn btn-primary" type="button" :disabled="realNameSubmitting" @click="confirmRealName">
+          {{ realNameSubmitting ? '提交中...' : '提交认证' }}
+        </button>
       </template>
     </AppModal>
 
@@ -551,10 +673,6 @@ function saveAlipay() {
 .filter-label {
   font-size: 13px;
   color: var(--text-main);
-}
-
-.time-sep {
-  color: var(--text-sub);
 }
 
 .filter-reset-btn {
@@ -705,6 +823,20 @@ function saveAlipay() {
   font-size: 14px;
   color: var(--text-main);
   line-height: 1.7;
+}
+
+/* ===== 实名认证弹窗 ===== */
+.real-name-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.real-name-tip {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-sub);
+  line-height: 1.6;
 }
 
 /* ===== 通用按钮（弹窗 footer） ===== */

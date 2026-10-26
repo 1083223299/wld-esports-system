@@ -67,6 +67,8 @@ async function submit() {
     const result = await authApi.login(form);
     userStore.setSession(result);
     show('登录成功', 'success');
+    // 通知通道在登录失效（401）时已停止轮询/关闭 ws；登录成功后触发重新初始化
+    window.dispatchEvent(new CustomEvent('auth:restored'));
 
     const redirect = route.query.redirect || '/home';
     router.replace(String(redirect));

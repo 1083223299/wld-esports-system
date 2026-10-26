@@ -11,12 +11,12 @@ import { gameApi } from '../../../api/modules/game';
 const { show } = useToast();
 const userStore = useUserStore();
 
-/* ================= 列表筛选 ================= */
+/* ================= 列表筛选（对齐接口 Query：id/name/phone/clubId/clubName/createdFrom/createdTo/accountStatus） ================= */
 const filter = reactive({
   playerId: '',
   playerName: '',
   phone: '',
-  status: '',
+  accountStatus: '',
   createTime: [],
 });
 
@@ -51,14 +51,17 @@ const specOptionsOf = (gameId) => {
 };
 
 // ===== 后端打手字段 → 页面字段映射 =====
-// 接口列表项 schema 未完整文档化，这里按新增/编辑响应文档的字段（id/clubId/name/phone/
-// status/canTake/inStore）映射；收益/押金/完成等统计字段接口暂未返回，缺失时优雅降级。
+// 后端口径（2026-10-26 确认，Apifox 526572935 已补全）：
+//   列表无单独 accountStatus 返回字段，accountStatus 只用于筛选（CAN_TAKE/BLOCK_TAKE/UNFROZEN/FROZEN/IN_STORE/QUIT）；
+//   列表状态用 canTake / inStore / walletFrozen；统计列用 incomeBalance / depositBalance /
+//   completedCount / rejectedCount / frozenCount（勿用 income/deposit/finished/failed/freezeCount）。
 const KNOWN_STATUS = ['可接单', '禁止接单', '未冻结', '冻结', '在店', '退店'];
 
-/** 状态文案：优先取后端 status 中文文案；为枚举码/未返回时按 canTake/inStore 推导 */
+/** 状态文案：优先取后端 status 中文文案；为枚举码/未返回时按 walletFrozen/inStore/canTake 推导 */
 function mapStatus(o = {}) {
   const raw = String(o.status ?? '').trim();
   if (KNOWN_STATUS.includes(raw)) return raw;
+  if (Number(o.walletFrozen) === 1) return '冻结';
   const inStore = Number(o.inStore) === 1;
   if (!inStore) return '退店';
   return Number(o.canTake) === 1 ? '可接单' : '禁止接单';
@@ -74,12 +77,12 @@ function mapPlayer(o = {}) {
     status: mapStatus(o),
     isInStore: inStore,
     clubName: o.clubName || '—', // 本俱乐部打手列表，接口未返回俱乐部名时占位
-    // 统计字段：接口暂未返回，预留（后端补充后自动展示）
-    income: o.income ?? 0,
-    deposit: o.deposit ?? 0,
-    finished: o.finished ?? 0,
-    failed: o.failed ?? 0,
-    freezeCount: o.freezeCount ?? 0,
+    // 统计字段：按后端字段名透传（缺失回退 0）
+    incomeBalance: Number(o.incomeBalance) || 0,
+    depositBalance: Number(o.depositBalance) || 0,
+    completedCount: Number(o.completedCount) || 0,
+    rejectedCount: Number(o.rejectedCount) || 0,
+    frozenCount: Number(o.frozenCount) || 0,
   };
 }
 
@@ -94,12 +97,18 @@ const editForm = reactive({
 /* ================= 列表加载（服务端分页） ================= */
 function buildListParams() {
   const params = { page: page.value, pageSize: pageSize.value };
-  // 状态筛选：接口 status 原样透传；后端状态枚举确认后在此对齐
-  if (filter.status) params.status = filter.status;
-  // 接口仅支持单一 keyword，按 名称 > 手机号 > ID 优先级取一个非空值
-  const keyword = filter.playerName?.trim() || filter.phone?.trim() || filter.playerId?.trim();
-  if (keyword) params.keyword = keyword;
-  // createTime 接口暂未提供对应筛选参数，预留（后端补充后可在此追加）
+  // 接口筛选参数：id 完全匹配、name 模糊、phone 完全匹配、accountStatus 状态、createdFrom/createdTo 创建时间
+  const id = filter.playerId?.trim();
+  const name = filter.playerName?.trim();
+  const phone = filter.phone?.trim();
+  if (id) params.id = id;
+  if (name) params.name = name;
+  if (phone) params.phone = phone;
+  if (filter.accountStatus) params.accountStatus = filter.accountStatus;
+  if (Array.isArray(filter.createTime) && filter.createTime.length === 2) {
+    if (filter.createTime[0]) params.createdFrom = filter.createTime[0];
+    if (filter.createTime[1]) params.createdTo = filter.createTime[1];
+  }
   return params;
 }
 
@@ -125,6 +134,11 @@ function handleSearch(values) {
   loadPlayers();
 }
 
+// 字段被清除/选择时同步查询条件（SearchComponent @change；仅同步、不触发查询，见组件注释）
+function handleFilterChange(values) {
+  Object.assign(filter, values);
+}
+
 function handleReset() {
   Object.keys(filter).forEach((key) => {
     if (Array.isArray(filter[key])) filter[key] = [];
@@ -133,7 +147,6 @@ function handleReset() {
   page.value = 1;
   loadPlayers();
 }
-
 function pageChange(nextPage) {
   page.value = nextPage;
   loadPlayers();
@@ -155,18 +168,21 @@ function getStatusClass(status) {
 }
 
 // ===== 列表列 / 搜索字段配置 =====
-// 筛选状态：在店 / 离店
-const statusFilterOptions = ['在店', '离店'];
+// 筛选状态：在店 / 退店（原型状态=在店、退店；接口枚举 IN_STORE / QUIT）
+const statusFilterOptions = [
+  { label: '在店', value: 'IN_STORE' },
+  { label: '退店', value: 'QUIT' },
+];
 
 const columns = [
   { key: 'id', title: '打手ID' },
   { key: 'name', title: '打手名称' },
   { key: 'clubName', title: '俱乐部名称' },
-  { key: 'income', title: '收益余额（元）' },
-  { key: 'deposit', title: '押金余额（元）' },
-  { key: 'finished', title: '已完成' },
-  { key: 'failed', title: '未通过' },
-  { key: 'freezeCount', title: '冻结' },
+  { key: 'incomeBalance', title: '收益余额（元）' },
+  { key: 'depositBalance', title: '押金余额（元）' },
+  { key: 'completedCount', title: '已完成' },
+  { key: 'rejectedCount', title: '未通过' },
+  { key: 'frozenCount', title: '冻结' },
   { key: 'status', title: '状态' },
   { key: 'op', title: '操作' },
 ];
@@ -176,12 +192,12 @@ const searchFields = [
   { prop: 'playerName', label: '打手名称', type: 'input', placeholder: '请输入打手名称', span: 5 },
   { prop: 'phone', label: '打手手机号', type: 'input', placeholder: '请输入打手手机号', span: 5 },
   {
-    prop: 'status',
+    prop: 'accountStatus',
     label: '状态',
     type: 'select',
     placeholder: '全部',
     span: 4,
-    options: [{ label: '全部', value: '' }, ...statusFilterOptions.map((item) => ({ label: item, value: item }))],
+    options: [{ label: '全部', value: '' }, ...statusFilterOptions],
   },
   {
     prop: 'createTime',
@@ -355,9 +371,31 @@ async function submitEdit() {
   }
 }
 
-// ===== 退店：OpenAPI 本次联调未提供对应端点，待后端补充后接入 =====
-async function triggerLeaveStore(row) {
-  show(`退店接口未在本次联调范围（OpenAPI 未提供对应端点），打手「${row.name}」退店待后端接入后支持`, 'warning');
+// ===== 退店：PUT /api/club/players/{id}/flags，请求体只传 {"inStore":0}（后端 2026-10-23 提供） =====
+// 仅"在店"展示退店按钮，二次确认后调用
+const leaveVisible = ref(false);
+const leaveRow = ref(null);
+const quittingId = ref(null);
+
+function openLeave(row) {
+  leaveRow.value = row;
+  leaveVisible.value = true;
+}
+
+async function confirmLeave() {
+  const row = leaveRow.value;
+  if (!row || quittingId.value) return;
+  quittingId.value = row.id;
+  try {
+    await playerApi.quitStore(row.id);
+    leaveVisible.value = false;
+    show('已退店', 'success');
+    await loadPlayers();
+  } catch {
+    // 后端错误已由 request.js 统一 toast，弹窗保持打开可重试
+  } finally {
+    quittingId.value = null;
+  }
 }
 
 onMounted(async () => {
@@ -381,6 +419,7 @@ onMounted(async () => {
         :labelWidth="90"
         @search="handleSearch"
         @reset="handleReset"
+        @change="handleFilterChange"
       />
     </div>
 
@@ -399,8 +438,8 @@ onMounted(async () => {
           </div>
         </template>
 
-        <template #cell-income="{ row }">{{ row.income.toFixed(2) }}</template>
-        <template #cell-deposit="{ row }">{{ row.deposit.toFixed(2) }}</template>
+        <template #cell-incomeBalance="{ row }">{{ row.incomeBalance.toFixed(2) }}</template>
+        <template #cell-depositBalance="{ row }">{{ row.depositBalance.toFixed(2) }}</template>
 
         <template #cell-status="{ row }">
           <span :class="['status-badge', getStatusClass(row.status)]">{{ row.status }}</span>
@@ -409,7 +448,7 @@ onMounted(async () => {
         <template #cell-op="{ row }">
           <div class="action-group">
             <button class="link-btn" @click="openEdit(row)">编辑</button>
-            <button v-if="row.isInStore" class="link-btn muted" @click="triggerLeaveStore(row)">退店</button>
+            <button v-if="row.isInStore" class="link-btn muted" @click="openLeave(row)">退店</button>
           </div>
         </template>
       </DataTable>
@@ -487,6 +526,21 @@ onMounted(async () => {
         <button class="btn btn-plain" @click="editDialogVisible = false">取消</button>
         <button class="btn btn-primary" :disabled="submitting" @click="submitEdit">
           {{ submitting ? '提交中…' : '确定' }}
+        </button>
+      </template>
+    </AppModal>
+
+    <!-- ===== 退店二次确认弹窗 ===== -->
+    <AppModal v-model="leaveVisible" title="退店确认" width="380px">
+      <div v-if="leaveRow" class="leave-confirm">
+        <p class="leave-text">
+          确认将打手「{{ leaveRow.name }}」（ID:{{ leaveRow.id }}）退店？退店后该打手将不再接单，押金提现须在退店满 14 天后进行。
+        </p>
+      </div>
+      <template #footer>
+        <button class="btn btn-plain" @click="leaveVisible = false">取消</button>
+        <button class="btn btn-primary" :disabled="quittingId === leaveRow?.id" @click="confirmLeave">
+          {{ quittingId === leaveRow?.id ? '退店中…' : '确认退店' }}
         </button>
       </template>
     </AppModal>
@@ -718,6 +772,18 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+/* ===== 退店二次确认 ===== */
+.leave-confirm {
+  padding: 4px 0;
+}
+
+.leave-text {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text-main);
+  line-height: 1.8;
 }
 </style>
 

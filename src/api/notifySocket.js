@@ -1,5 +1,6 @@
 import { watch } from 'vue';
 import { config } from '../config/env';
+import { getToken } from '../utils/auth';
 import { orderConfigApi } from './modules/orderConfig';
 
 /**
@@ -16,12 +17,17 @@ import { orderConfigApi } from './modules/orderConfig';
  *       · 每 60 秒轮询推送一条示例消息（卡单/公告轮换）
  *     - 接入真实后端后删除本分支即可。
  *  2. 真实 WebSocket 模式（useMock = false，dev/test/staging/prod）
- *     - 连接 config.websocketURL 配置的地址
- *     - 自动断线重连（指数退避，最长 30s）
- *     - 服务端消息约定：
- *       普通消息：{ type: 'stuck'|'system', title, content, orderNos, mentions, time }
- *       包装消息：{ type: 'notify', payload: { ...同上 } }
- *       或直接推数组 [ { ... }, ... ]
+ *     - 连接后端实时推送地址：{API 同域、保留基础路径前缀}/ws/notify?token={token}&client=CLUB
+ *       （例：API 为 http://sys.test.weilaidong.com/wld-dj → ws://sys.test.weilaidong.com/wld-dj/ws/notify；
+ *        token 需要 URL 编码，client 必须和 token 同一端；config.websocketURL 若配置了非占位地址则优先使用）
+ *     - 自动断线重连（指数退避；参数由 env.js config.wsReconnect 配置：
+ *       enabled 开关 / baseDelayMs 初始间隔 / maxDelayMs 最大间隔 / maxRetries 最大重试次数，默认无限重试）
+ *     - 服务端推送协议（2026-10-23 后端口径，type 为大写枚举，由 stores/notify.js 按 type 分发）：
+ *       新通知：{ type: 'NOTIFICATION', id, scene, sceneLabel, title, content,
+ *                 orderId, jumpTarget, timeText, unread, badge }
+ *       标记已读后：{ type: 'UNREAD', unread, badge }（只有 unread 和 badge，badge 超 99 为 '99+'）
+ *       （平台后台的弹框通知走 /ws/admin，内容是「标题：内容」纯文本，不是这套 JSON，俱乐部端不连）
+ *     - 历史兼容：仍容忍本地 mock 时代的 { type:'stuck'|'system'|'notify'(payload) } 与数组推送
  * ---------------------------------------------------------------
  */
 
@@ -279,25 +285,51 @@ function startMockEngine(emit) {
 
 /**
  * 启动真实 WS 通道（含断线自动重连）
+ * 地址：优先取 config.websocketURL（非占位）；占位时按 apibaseURL 同域推导。
+ * 无论哪种来源，连接时都自动注入 token（URL 编码）+ client=CLUB，配置里只写连接地址。
  * @param {(msg: Object) => void} emit
  * @param {(status: 'connected'|'disconnected') => void} onStatus
  */
 function startRealSocket(emit, onStatus) {
-  const url = config.websocketURL;
   let ws = null;
   let closed = false;
   let retry = 0;
   let retryTimer = null;
 
+  // 断连重连配置（env.js wsReconnect；默认启用、3s 起指数退避、30s 封顶、无限重试）
+  const rc = config.wsReconnect || {};
+  const reconnectEnabled = rc.enabled !== false;
+  const baseDelayMs = Number(rc.baseDelayMs) > 0 ? Number(rc.baseDelayMs) : 3000;
+  const maxDelayMs = Number(rc.maxDelayMs) > 0 ? Number(rc.maxDelayMs) : 30000;
+  const maxRetries = Number(rc.maxRetries) >= 0 ? Number(rc.maxRetries) : 0; // 0 = 无限重试
+
   const scheduleRetry = () => {
-    if (closed || !url) return;
-    const delay = Math.min(30000, 3000 * 2 ** retry);
+    if (closed) return;
+    if (!reconnectEnabled) return; // 配置关闭重连：断连后保持 disconnected，不再连
+    if (maxRetries > 0 && retry >= maxRetries) return; // 达到最大重试次数：停止
+    const delay = Math.min(maxDelayMs, baseDelayMs * 2 ** retry);
     retry += 1;
     retryTimer = setTimeout(connect, delay);
   };
 
+  // 每次连接（含重连）都重新解析地址并注入最新 token，避免启动早于登录态导致空 token
+  const resolveUrl = () => {
+    const base = isPlaceholderWs(config.websocketURL)
+      ? deriveNotifyWsBase()
+      : config.websocketURL;
+    return withAuthQuery(base);
+  };
+
   const connect = () => {
-    if (closed || !url) return;
+    if (closed) return;
+    // 未登录（无 token）时不发起连接也不排重试：避免登录失效后 ws 持续空转打握手请求；
+    // 重新登录后由 auth:restored 触发 notify store 重新 init（重新 createNotifySocket）
+    if (!getToken()) return;
+    const url = resolveUrl();
+    if (!url) {
+      scheduleRetry();
+      return;
+    }
     try {
       ws = new WebSocket(url);
     } catch (e) {
@@ -352,9 +384,48 @@ function startRealSocket(emit, onStatus) {
 
 /* ================= 对外入口 ================= */
 
-/** 判断 WS 地址是否为占位（未接入真实后端） */
+/** 判断 WS 地址是否为占位（未配置真实后端地址） */
 function isPlaceholderWs(url = '') {
   return !url || /myapp\.com/.test(url) || url.startsWith('ws://localhost:3001');
+}
+
+/**
+ * 按后端口径推导实时推送地址的基础路径（不含 Query）：
+ * {API 同域 ws 协议 + 保留基础路径前缀}/ws/notify
+ * 例：API 为 http://sys.test.weilaidong.com/wld-dj → ws://sys.test.weilaidong.com/wld-dj/ws/notify
+ * （网关原样转发，必须保留 /wld-dj 这类上下文前缀，不能只拼根路径 /ws/notify）
+ */
+function deriveNotifyWsBase() {
+  const base = config.apibaseURL || '';
+  try {
+    const u = new URL(base, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+    // 保留 apibaseURL 的路径前缀（如 /wld-dj），再拼接 /ws/notify
+    u.pathname = `${u.pathname.replace(/\/+$/, '')}/ws/notify`;
+    u.search = '';
+    return u.toString();
+  } catch {
+    // 无法解析时返回空，触发重试等待登录态就绪
+    return '';
+  }
+}
+
+/**
+ * 给 WS 连接地址注入鉴权 Query：token（URL 编码）+ client=CLUB
+ * 配置里只写地址，token 随登录态在连接时注入，不写死；每次连接刷新一次
+ * @param {string} baseUrl WS 连接地址（可含已有 Query，会被 token/client 覆盖）
+ * @returns {string} 完整 WS URL；失败返回空串
+ */
+function withAuthQuery(baseUrl) {
+  if (!baseUrl) return '';
+  const token = getToken() || '';
+  try {
+    const u = new URL(baseUrl, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+    u.search = `token=${encodeURIComponent(token)}&client=CLUB`;
+    return u.toString();
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -364,15 +435,11 @@ function isPlaceholderWs(url = '') {
  * @returns {{ mode: 'mock'|'ws', close: Function }}
  */
 export function createNotifySocket({ onMessage, onStatus }) {
-  const url = config.websocketURL || '';
-  // 未配置真实 WS 地址（或仍为占位域名）时，自动回落到本地模拟通道，
-  // 保证打包产物开箱即可看到卡单推送演示；接入真实后端后配置 websocket 地址即切换真实通道
-  const useMock = config.useMock !== false || isPlaceholderWs(url);
+  // 仅本地模拟模式（useMock=true，local 环境）回落 mock；
+  // dev/test/staging/prod 一律走真实 WS（地址未配置时按 /ws/notify?token=&client=CLUB 推导）
+  const useMock = config.useMock === true;
 
   if (useMock) {
-    if (config.useMock === false) {
-      console.warn('[notify] 未配置真实 WebSocket 地址，使用本地模拟推送通道');
-    }
     onStatus && onStatus('connected');
     return { mode: 'mock', close: startMockEngine(onMessage) };
   }

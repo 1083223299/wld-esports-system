@@ -63,7 +63,7 @@
               />
             </svg>
             <span v-if="notify.unreadCount" class="notice-badge">
-              {{ notify.unreadCount > 99 ? '99+' : notify.unreadCount }}
+              {{ notify.badge || (notify.unreadCount > 99 ? '99+' : notify.unreadCount) }}
             </span>
           </button>
 

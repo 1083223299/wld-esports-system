@@ -65,6 +65,13 @@ const routes = [
             meta: { title: '我的订单' },
           },
           {
+            path: 'order-detail/:orderId',
+            name: 'OrderDetail',
+            component: () => import('../views/orderManagement/OrderDetailView/index.vue'),
+            hidden: true, // 通知跳转目标，不进侧边栏
+            meta: { title: '订单详情' },
+          },
+          {
             path: 'hall',
             name: 'ClaimHall',
             component: () => import('../views/orderManagement/ClaimHallView/index.vue'),

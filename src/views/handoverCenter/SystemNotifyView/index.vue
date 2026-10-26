@@ -10,10 +10,12 @@ import { useToast } from '../../../composables/useToast';
  * 系统通知（入口：右上角铃铛）
  * 数据源：GET /api/club/notifications（09-通知，后端真实接口，挂载时拉取）
  * - 顶部「仅看未读」开关（可选中 / 取消选中）+ 全部已读（逐个调用已读接口）
- * - 列表字段：类型标签 / 标题 / 正文 / 时间 / 查看（点击=标记已读并跳转对应页面）
- * - 跳转规则（utils/notifyJump）：
- *   · 派单转单、订单交易关闭 → 订单列表并搜索该订单（查不到报「订单不存在」）
- *   · 抢单超时回流、钱包类（转单扣款/提现失败）→ 图未标注跳转，仅标记已读
+ * - 列表字段：类型标签（sceneLabel 优先）/ 标题 / 正文 / 相对时间（timeText 优先）/ 查看（点击=标记已读并跳转对应页面）
+ * - 跳转规则（utils/notifyJump，2026-10-23 后端口径）：
+ *   · jumpTarget=ORDER → 订单详情（详情页未建，暂跳订单列表并搜索 orderNo）
+ *   · 本地 mock / 旧消息按类型：派单转单、订单交易关闭、卡单预警 → 订单列表并搜索（查不到报「订单不存在」）
+ *   · 其余（抢单超时 / 钱包类）→ 图未标注跳转，仅标记已读
+ * - 已读后 WebSocket 会推 type=UNREAD，铃铛角标（badge 字符串，超 99 为 99+）随之更新
  */
 const notify = useNotifyStore();
 const router = useRouter();
@@ -42,9 +44,15 @@ function relativeTime(t) {
   return String(t).slice(0, 10);
 }
 
+/** 展示时间：后端已下发相对时间 timeText（刚刚/N分钟前/N小时前/N天前）时直接用，否则本地计算 */
+function displayTime(item) {
+  return item.timeText || relativeTime(item.time);
+}
+
 /* ================= 类型标签 ================= */
 function typeLabel(item) {
-  return TYPE_META[item.type]?.label || '系统通知';
+  // 后端下发的场景名称优先（sceneLabel，如「订单超时提醒」），本地 mock 消息回退类型元信息
+  return item.sceneLabel || TYPE_META[item.type]?.label || '系统通知';
 }
 
 /** 点击查看：未读 → 标记已读，并按需求图跳转规则跳转（无跳转仅标记已读） */
@@ -107,7 +115,7 @@ onMounted(() => {
             <span v-if="!item.read" class="unread-dot" title="未读" />
             <span class="type-chip" :class="TYPE_META[item.type]?.className">{{ typeLabel(item) }}</span>
             <strong class="item-title">{{ item.title }}</strong>
-            <span class="item-time">{{ relativeTime(item.time) }}</span>
+            <span class="item-time">{{ displayTime(item) }}</span>
           </div>
           <p class="item-content">{{ item.content }}</p>
         </div>

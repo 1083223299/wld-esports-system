@@ -86,6 +86,13 @@ function normalizeMessage(raw = {}) {
   const amount = toNum(order.amount);
   const clubAdjust = toNum(order.clubAdjust);
 
+  // 预估到手（俱乐部到手）：后端口径（2026-10-23）用 order.hallAmount，前端直接展示不再乘打手分润；
+  // 没配俱乐部部分润时 hallAmount 为空 → 展示 "—"
+  const hallAmount =
+    order.hallAmount !== undefined && order.hallAmount !== null
+      ? toNum(order.hallAmount)
+      : null;
+
   // 订单标签：冻结 / 售后中
   const tags = [];
   if (toNum(order.frozen) === 1) tags.push('冻结');
@@ -103,13 +110,15 @@ function normalizeMessage(raw = {}) {
     orderNo: order.orderNo || '',
     channel: order.channel || order.channelCode || '',
     amount,
-    // 预估到手 = 订单金额 + 俱乐部加减价净值（减价为负）
-    actualAmount: amount + clubAdjust,
+    // 预估到手 = 俱乐部到手（hallAmount，后端已按规则算好：百分比=订单金额×俱乐部部分润比例、
+    // 固定值按规格、含平台加减价、最小为0；未配分润时空）
+    hallAmountReady: hallAmount !== null,
+    actualAmount: hallAmount !== null ? hallAmount : amount + clubAdjust,
     gameName: order.gameName || (order.game && order.game.name) || '',
     spec: order.spec || order.specName || (order.game && order.game.spec) || '',
     clientType,
     product: order.itemName || order.product || order.skuName || '',
-    assignService: order.assignService || order.ownerName || '',
+    assignService: order.assignService || order.ownerName || '', // 后端口径：客服姓名用 ownerName
     claimedCount,
     requiredCount,
     note: order.note || order.dispatchNote || order.remark || '',
@@ -269,7 +278,9 @@ onMounted(loadList);
         <div class="hall-card-foot">
           <div class="hall-amount-box">
             <span class="hall-amount-label">预估到手</span>
-            <span class="hall-amount">¥{{ Number(row.actualAmount).toFixed(2) }}</span>
+            <span class="hall-amount">
+              {{ row.hallAmountReady ? `¥${Number(row.actualAmount).toFixed(2)}` : '—' }}
+            </span>
           </div>
           <div v-if="row.status === 'pending'" class="hall-actions">
             <button class="hall-btn hall-btn-primary" type="button" @click="acceptOrder(row)">接单</button>

@@ -27,7 +27,7 @@ const props = defineProps({
   rowColumns: { type: Number, default: 4 },
 });
 
-const emit = defineEmits(['search', 'reset']);
+const emit = defineEmits(['search', 'reset', 'change']);
 
 // default-time 在 element-plus 2.14+ 要求 Date 对象数组，传字符串数组会导致 dayjs 解析失败、面板显示 NaN
 const DEFAULT_TIME = [new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)];
@@ -36,6 +36,9 @@ const searchForm = ref();
 const formData = ref({});
 // 存储默认值用于重置
 const defaultFormData = ref({});
+// 用户是否已手动交互过表单：交互后不再用 initialValues 重建表单（防止父组件 filter 异步变化
+// 把旧查询条件回填覆盖用户刚清除/修改的内容）；重置后恢复同步。
+let userTouched = false;
 
 // 合并 items 和 fields，优先使用 items
 const formItems = computed(() => (props.items.length > 0 ? props.items : props.fields));
@@ -97,7 +100,11 @@ const initFormData = () => {
 
 watch(
   () => props.initialValues,
-  () => initFormData(),
+  () => {
+    if (!userTouched) initFormData();
+    // 用户已手动改过表单时不再重建：查询条件已通过 @change 同步到父组件，
+    // 避免父组件 filter 异步变化把旧条件回填覆盖（2026-10-26 修复"清除后条件还在"）
+  },
   { deep: true, immediate: true },
 );
 
@@ -141,6 +148,16 @@ const handleSearch = () => {
     // 深拷贝表单数据，避免引用问题
     emit('search', cloneFieldValue(formData.value));
   });
+};
+
+// 字段值被「清除（叉号）/ 选择（下拉/日期/级联/单选）」时同步给父组件查询条件。
+// 仅同步 filter，不触发查询（保持"点搜索才查"交互）；文本输入不触发（避免打断输入，未搜索的输入不参与查询）。
+// 背景（2026-10-26）：修复"点叉号清除字段后再查询/翻页，条件还在"——此前清除只改组件内部 formData，
+// 父组件 filter 不知情，翻页/切 Tab 等查询仍用旧条件。
+const onFieldChange = (item) => {
+  userTouched = true;
+  if (props.immediateSearch) return; // 即时搜索模式已通过 search emit 同步，无需重复
+  emit('change', cloneFieldValue(formData.value));
 };
 
 const isRangeType = (item) => item && ['daterange', 'daterange-no-time'].includes(item.type);
@@ -204,6 +221,7 @@ const doReset = () => {
   });
 
   searchForm.value?.clearValidate();
+  userTouched = false; // 重置后恢复 initialValues 同步
   emit('reset', cloneFieldValue(formData.value));
 };
 
@@ -271,7 +289,8 @@ defineExpose({
               v-model="formData[item.prop]"
               :placeholder="item.placeholder || `请输入${item.label}`"
               :clearable="item.clearable !== false"
-              @input="(val) => handleNumberInput(val, item)"
+              @input="(val) => { userTouched = true; handleNumberInput(val, item); }"
+              @clear="onFieldChange(item)"
               @keyup.enter="handleSearch"
             />
           </el-form-item>
@@ -285,6 +304,7 @@ defineExpose({
               style="width: 100%"
               :filterable="item.filterable"
               :multiple="item.multiple"
+              @change="onFieldChange(item)"
             >
               <el-option
                 v-for="option in item.options"
@@ -314,12 +334,13 @@ defineExpose({
                 }
               "
               :show-all-levels="false"
+              @change="onFieldChange(item)"
             />
           </el-form-item>
 
           <!-- 单选框 -->
           <el-form-item v-else-if="item.type === 'radio'" :label="item.label" :prop="item.prop">
-            <el-radio-group v-model="formData[item.prop]">
+            <el-radio-group v-model="formData[item.prop]" @change="onFieldChange(item)">
               <el-radio v-for="option in item.options" :key="option.value" :value="option.value">
                 {{ option.label }}
               </el-radio>
@@ -338,7 +359,7 @@ defineExpose({
               style="width: 100%"
               :clearable="item.clearable !== false"
               :disabled-date="getDisabledDate(item)"
-              @change="handleDateChange(item)"
+              @change="(v) => { handleDateChange(item); onFieldChange(item); }"
             />
           </el-form-item>
 
@@ -358,7 +379,7 @@ defineExpose({
               :range-separator="item.rangeSeparator || '—'"
               :default-time="item.defaultTime || DEFAULT_TIME"
               class="hide-time-in-input"
-              @change="handleDateChange(item)"
+              @change="(v) => { handleDateChange(item); onFieldChange(item); }"
             />
           </el-form-item>
 
@@ -376,7 +397,7 @@ defineExpose({
               :clearable="item.clearable !== false"
               :disabled-date="getDisabledDate(item)"
               :range-separator="item.rangeSeparator || '—'"
-              @change="handleDateChange(item)"
+              @change="(v) => { handleDateChange(item); onFieldChange(item); }"
             />
           </el-form-item>
 
