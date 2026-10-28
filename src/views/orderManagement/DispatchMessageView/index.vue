@@ -136,6 +136,7 @@ async function loadList() {
     const data = await dispatchApi.list();
     const source = Array.isArray(data) ? data : data && Array.isArray(data.list) ? data.list : [];
     rows.value = source.map(normalizeMessage);
+    page.value = Math.min(page.value, Math.max(1, Math.ceil(rows.value.length / pageSize.value)));
   } catch (e) {
     // 错误已由 request 统一提示
     rows.value = [];
@@ -168,13 +169,6 @@ function isAbnormal(row) {
   return tags.includes('冻结') || tags.includes('售后中');
 }
 
-/** 用接口返回的订单对象刷新卡片（保留消息 ID 与原始消息） */
-function applyOrderResult(row, order) {
-  const next = normalizeMessage({ ...row.raw, order });
-  Object.assign(row, next, { id: row.id });
-  return row;
-}
-
 /* ===== 接单 ===== */
 async function acceptOrder(row) {
   // 未配置俱乐部分润：报错弹窗
@@ -188,10 +182,9 @@ async function acceptOrder(row) {
     return;
   }
   try {
-    const order = await dispatchApi.accept(row.id);
-    applyOrderResult(row, order);
-    row.status = 'accepted';
+    await dispatchApi.accept(row.id);
     show('接单成功', 'success');
+    await loadList();
   } catch (e) {
     // 错误已由 request 统一提示，保持原状态
   }
@@ -208,11 +201,10 @@ async function confirmReject() {
   const row = rejectTarget.value;
   if (!row) return;
   try {
-    const order = await dispatchApi.reject(row.id, rejectReason.value.trim());
-    applyOrderResult(row, order);
-    row.status = 'rejected';
+    await dispatchApi.reject(row.id, rejectReason.value.trim());
     rejectVisible.value = false;
     show('已拒绝该订单', 'success');
+    await loadList();
   } catch (e) {
     // 错误已由 request 统一提示；保留弹窗供修改原因重试
   }

@@ -18,6 +18,8 @@
  *                        baseDelayMs  重连初始间隔（默认 3000，指数退避 2^n）
  *                        maxDelayMs   重连最大间隔（默认 30000）
  *                        maxRetries   最大重试次数（默认 0 = 无限重试）
+ *   wsSilentDeadMs       ws 静默假死阈值（毫秒，默认 45000；超时无下行消息则主动 close 触发重连）
+ *   wsHeartbeatPingMs    前端主动上行心跳间隔（毫秒，默认 0=关闭；开启后按间隔发送 {type:'PING'}）
  * ---------------------------------------------------------------
  */
 export const ENV_NAMES = {

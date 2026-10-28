@@ -177,8 +177,8 @@ function handleCommand(command) {
 }
 
 .breadcrumb-row {
-  height: 64px;
-  min-height: 64px;
+  height: 60px;
+  min-height: 60px;
   display: flex;
   align-items: center;
   justify-content: space-between;

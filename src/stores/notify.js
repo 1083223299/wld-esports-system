@@ -25,7 +25,8 @@ import { setFaviconBadge } from '../utils/faviconBadge';
  * - bubbles  实时消息气泡（不持久化，WS 收到消息自动弹出）
  * - 收到消息时：入列 → 弹页面气泡 → 播提示音 → 弹浏览器系统通知 → 更新 favicon 角标
  * - WS 推送协议（2026-10-23）：type=NOTIFICATION 新通知入列并同步 unread/badge；
- *   type=UNREAD 仅更新未读角标（标记已读后由后端推送）
+ *   type=UNREAD 仅更新未读角标（标记已读后由后端推送）；
+ *   type=PING/PONG 仅保活，不入列
  * ---------------------------------------------------------------
  */
 
@@ -264,6 +265,7 @@ export const useNotifyStore = defineStore('notify', {
      * @param {{silent?: boolean}} opts silent=true 时不弹气泡不提醒（仅入列）
      */
     handleIncoming(raw, opts = {}) {
+      if (raw && (raw.type === 'PING' || raw.type === 'PONG')) return;
       // 后端已读回执：type=UNREAD，只带最新 unread 和 badge，不产生列表项（2026-10-23 后端口径）
       if (raw && raw.type === 'UNREAD') {
         this.applyUnreadPayload(raw);

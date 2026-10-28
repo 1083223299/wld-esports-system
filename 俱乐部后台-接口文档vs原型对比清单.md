@@ -117,7 +117,7 @@
 | 原型字段/交互 | 接口/口径 | 对齐 |
 |--------------|---------|------|
 | 可提现余额 | GET /api/club/wallets/me → data={**income**(可提现收益), **deposit**(押金), **walletFrozen**} | ✅ 前端已对齐（income 为可提现余额） |
-| 明细（类型/金额/原因/关联订单号） | GET /api/club/wallets/txns（walletType/page/pageSize；时间筛选 **createdFrom/createdTo**，后端已确认将补此参数；**类型筛选 bizType 传中文枚举**：订单收入/提现成功/提现失败/平台扣除/转单扣除/余额抵扣/平台充值/充值，2026-10-26 接口校验提示确认） | ✅ 2026-10-26 押金页由本地筛全量改为服务端筛选，两页改条件即调接口 |
+| 押金明细展示（类型/金额/原因/时间；原型不展示关联订单号） | GET /api/club/wallets/txns（walletType/page/pageSize；时间筛选 **createdFrom/createdTo**，后端已确认将补此参数；**类型筛选 bizType 传中文枚举**：订单收入/提现成功/提现失败/平台扣除/转单扣除/余额抵扣/平台充值/充值，2026-10-26 接口校验提示确认） | ✅ 押金页按原型展示四列；2026-10-26 起改为服务端筛选，改条件即调接口 |
 | 提现条件 | GET /api/club/wallets/withdraw-rules?walletType=INCOME：**dailyLimit(次数上限)/usedToday/remainToday/windowStart/windowEnd/inWindow/minAmount(90)/showWithdraw(true)** | ✅ 前端已改接后端新字段（原来 dailyMaxTimes/availableHourStart/End，已废弃）；inWindow 后端算好直接读，缺失回退本地解析时段 |
 | 提现 | POST /api/club/wallets/withdraw | ✅ 前端已接（实名校验+规则校验+二次确认） |
 | 提现失败原因映射 | 提现记录/通知 | ⚠️ 待核 |

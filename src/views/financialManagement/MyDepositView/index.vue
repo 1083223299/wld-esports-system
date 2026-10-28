@@ -126,7 +126,6 @@ function normalizeTxn(item) {
     typeText: FLOW_TYPE_TEXT[item.bizType] || item.bizType || '—',
     amount: Number(item.amount) || 0,
     reason: item.reason || '',
-    orderNo: item.orderNo || '',
     time: item.createdAt || '',
   };
 }
@@ -203,7 +202,6 @@ const typeOptions = computed(() => [
 const columns = [
   { key: 'typeText', title: '类型' },
   { key: 'amount', title: '金额（元）' },
-  { key: 'orderNo', title: '关联订单号' },
   { key: 'reason', title: '原因' },
   { key: 'time', title: '时间' },
 ];
@@ -485,10 +483,6 @@ function saveAlipay() {
           <span :class="['amount-text', row.amount >= 0 ? 'amount-in' : 'amount-out']">
             {{ formatAmount(row.amount) }}
           </span>
-        </template>
-        <template #cell-orderNo="{ row }">
-          <span v-if="row.orderNo">{{ row.orderNo }}</span>
-          <span v-else class="muted-text">—</span>
         </template>
         <template #cell-reason="{ row }">
           <span v-if="row.reason">{{ row.reason }}</span>

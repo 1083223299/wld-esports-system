@@ -22,6 +22,10 @@ import { orderConfigApi } from './modules/orderConfig';
  *        token 需要 URL 编码，client 必须和 token 同一端；config.websocketURL 若配置了非占位地址则优先使用）
  *     - 自动断线重连（指数退避；参数由 env.js config.wsReconnect 配置：
  *       enabled 开关 / baseDelayMs 初始间隔 / maxDelayMs 最大间隔 / maxRetries 最大重试次数，默认无限重试）
+ *     - 保活策略（2026-10-28）：
+ *       · 应用层心跳消息 { type:'PING' } / { type:'PONG' } 只用于刷新连接存活，不进入业务分发
+ *       · 收到 PING 自动回 PONG
+ *       · 保留约 45s 静默假死检测：超时无任何下行消息则主动 close 触发重连
  *     - 服务端推送协议（2026-10-23 后端口径，type 为大写枚举，由 stores/notify.js 按 type 分发）：
  *       新通知：{ type: 'NOTIFICATION', id, scene, sceneLabel, title, content,
  *                 orderId, jumpTarget, timeText, unread, badge }
@@ -295,6 +299,8 @@ function startRealSocket(emit, onStatus) {
   let closed = false;
   let retry = 0;
   let retryTimer = null;
+  let staleTimer = null;
+  let pingTimer = null;
 
   // 断连重连配置（env.js wsReconnect；默认启用、3s 起指数退避、30s 封顶、无限重试）
   const rc = config.wsReconnect || {};
@@ -302,6 +308,26 @@ function startRealSocket(emit, onStatus) {
   const baseDelayMs = Number(rc.baseDelayMs) > 0 ? Number(rc.baseDelayMs) : 3000;
   const maxDelayMs = Number(rc.maxDelayMs) > 0 ? Number(rc.maxDelayMs) : 30000;
   const maxRetries = Number(rc.maxRetries) >= 0 ? Number(rc.maxRetries) : 0; // 0 = 无限重试
+  // 静默假死阈值：建议 ≈ 服务端心跳间隔(15s) * 3
+  const silentDeadMs = Number(config.wsSilentDeadMs) > 0 ? Number(config.wsSilentDeadMs) : 45000;
+  // 主动上行心跳（可选）：默认关闭；如需开启可在 env.js 配 wsHeartbeatPingMs（建议 15000）
+  const heartbeatPingMs =
+    Number(config.wsHeartbeatPingMs) > 0 ? Number(config.wsHeartbeatPingMs) : 0;
+
+  const clearTimers = () => {
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+    if (staleTimer) {
+      clearTimeout(staleTimer);
+      staleTimer = null;
+    }
+    if (pingTimer) {
+      clearInterval(pingTimer);
+      pingTimer = null;
+    }
+  };
 
   const scheduleRetry = () => {
     if (closed) return;
@@ -318,6 +344,45 @@ function startRealSocket(emit, onStatus) {
       ? deriveNotifyWsBase()
       : config.websocketURL;
     return withAuthQuery(base);
+  };
+
+  const sendHeartbeat = (type) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({ type }));
+    } catch {
+      /* 忽略 */
+    }
+  };
+
+  const resetStaleTimer = () => {
+    if (!silentDeadMs) return;
+    if (staleTimer) clearTimeout(staleTimer);
+    staleTimer = setTimeout(() => {
+      if (closed || !ws || ws.readyState !== WebSocket.OPEN) return;
+      try {
+        ws.close();
+      } catch {
+        /* 忽略 */
+      }
+    }, silentDeadMs);
+  };
+
+  const onAlive = () => {
+    resetStaleTimer();
+  };
+
+  const startPingLoop = () => {
+    if (!heartbeatPingMs || pingTimer) return;
+    pingTimer = setInterval(() => sendHeartbeat('PING'), heartbeatPingMs);
+  };
+
+  const parseHeartbeatType = (raw) => {
+    if (raw && typeof raw === 'object') {
+      return String(raw.type || '').toUpperCase();
+    }
+    if (typeof raw === 'string') return raw.trim().toUpperCase();
+    return '';
   };
 
   const connect = () => {
@@ -338,18 +403,29 @@ function startRealSocket(emit, onStatus) {
     }
     ws.onopen = () => {
       retry = 0;
+      onAlive();
+      startPingLoop();
       onStatus('connected');
     };
     ws.onmessage = (ev) => {
+      onAlive();
       let data = null;
       try {
         data = JSON.parse(ev.data);
       } catch {
+        const textType = parseHeartbeatType(ev.data);
+        if (textType === 'PING') sendHeartbeat('PONG');
         return;
       }
       const rawList = Array.isArray(data) ? data : [data];
       rawList.forEach((raw) => {
         if (!raw || typeof raw !== 'object') return;
+        const heartbeatType = parseHeartbeatType(raw);
+        if (heartbeatType === 'PING') {
+          sendHeartbeat('PONG');
+          return;
+        }
+        if (heartbeatType === 'PONG') return;
         // 包装格式 { type:'notify', payload } → 解包
         const msg = raw.type === 'notify' && raw.payload ? raw.payload : raw;
         if (!msg || typeof msg !== 'object') return;
@@ -357,6 +433,7 @@ function startRealSocket(emit, onStatus) {
       });
     };
     ws.onclose = () => {
+      clearTimers();
       onStatus('disconnected');
       scheduleRetry();
     };
@@ -373,7 +450,7 @@ function startRealSocket(emit, onStatus) {
 
   return () => {
     closed = true;
-    if (retryTimer) clearTimeout(retryTimer);
+    clearTimers();
     try {
       ws && ws.close();
     } catch {

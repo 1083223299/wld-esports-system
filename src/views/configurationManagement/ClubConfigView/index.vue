@@ -114,6 +114,7 @@ async function fetchConfig() {
     if (Number.isFinite(Number(res.playerRate))) playerRate.value = Number(res.playerRate);
     orderDirty.value = false;
     profitDirty.value = false;
+    if (profitMode.value === 'FIXED') await fetchFixedProfits();
   } catch {
     // 错误提示已由 request.js 统一 toast
   } finally {
@@ -121,29 +122,18 @@ async function fetchConfig() {
   }
 }
 
-// 初始/切换到固定值模式 → 拉取分润列表；切换到百分比 → 无需拉取（playerRate 已在 settings 回填）
-watch(
-  () => profitMode.value,
-  (m) => {
-    if (m === 'FIXED') fetchFixedProfits();
-    profitDirty.value = true; // 切换分润模式视为未保存修改
-  }
-);
+function onModeChange() {
+  orderDirty.value = true;
+}
 
-// 百分比数值 / 固定值金额修改 → 标记未保存
-watch(
-  () => playerRate.value,
-  () => {
-    profitDirty.value = true;
-  }
-);
-watch(
-  () => fixedRows.value,
-  () => {
-    profitDirty.value = true;
-  },
-  { deep: true }
-);
+function onProfitModeChange() {
+  profitDirty.value = true;
+  if (profitMode.value === 'FIXED') fetchFixedProfits();
+}
+
+function onProfitValueChange() {
+  profitDirty.value = true;
+}
 
 /** 是否有未保存的修改（接单设置或分润设置） */
 const hasUnsaved = computed(() => orderDirty.value || profitDirty.value);
@@ -302,6 +292,7 @@ onMounted(() => {
                   name="profitMode"
                   value="PERCENT"
                   class="option-radio"
+                  @change="onProfitModeChange"
                 />
                 <span class="mode-icon" :class="{ on: profitMode === 'PERCENT' }">%</span>
                 <div class="option-body">
@@ -332,6 +323,7 @@ onMounted(() => {
                   name="profitMode"
                   value="FIXED"
                   class="option-radio"
+                  @change="onProfitModeChange"
                 />
                 <span class="mode-icon" :class="{ on: profitMode === 'FIXED' }">
                   <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
@@ -371,6 +363,7 @@ onMounted(() => {
                       max="99"
                       step="1"
                       class="num-input"
+                      @input="onProfitValueChange"
                     />
                     <span class="percent-unit">%</span>
                   </div>
@@ -437,6 +430,7 @@ onMounted(() => {
                       min="0"
                       step="0.01"
                       class="amount-input"
+                      @input="onProfitValueChange"
                       :class="{ empty: row.playerFixed === '' }"
                       :placeholder="row.playerFixed === '' ? '未配置' : ''"
                     />

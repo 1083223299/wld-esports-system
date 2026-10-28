@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import AppModal from '../../../components/AppModal.vue';
 import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
@@ -31,6 +31,7 @@ import { PLAYER_OPTIONS } from './mockData';
  */
 const { show } = useToast();
 const route = useRoute();
+const router = useRouter();
 
 /* ================= 筛选 ================= */
 const filter = reactive({ orderNo: '', status: '', acceptTimeRange: [] });
@@ -64,12 +65,17 @@ function handleSearch(values) {
 function handleFilterChange(values) {
   Object.assign(filter, values);
 }
-function handleReset() {
+async function handleReset() {
   filter.orderNo = '';
   filter.status = '';
   filter.acceptTimeRange = [];
   page.value = 1;
-  loadOrders();
+  const query = { ...route.query };
+  delete query.orderNo;
+  delete query.orderId;
+  delete query.openDetail;
+  await router.replace({ query });
+  await loadOrders();
 }
 
 /* ================= 状态映射（后端枚举 → 页面枚举） ================= */

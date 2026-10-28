@@ -10,7 +10,7 @@ const props = defineProps({
   // 栅格间隔
   gutter: { type: Number, default: 20 },
   // 标签宽度
-  labelWidth: { type: String, default: '82px' },
+  labelWidth: { type: [String, Number], default: '82px' },
   // 是否显示重置按钮
   showReset: { type: Boolean, default: true },
   // 是否在重置前二次确认
