@@ -55,6 +55,13 @@ export const playerApi = {
   getSpecs: (playerId) => request.get(`/api/club/players/${playerId}/specs`),
 
   /**
+   * 当前俱乐部可配置的游戏/规格（真实后端数据）
+   * @returns {Promise<Array<{gameId:number, gameName?:string, all?:boolean,
+   *   specId?:number, specName?:string, specIds?:number[]}>>}
+   */
+  getMyAvailableSpecs: () => request.get('/api/club/specs/mine'),
+
+  /**
    * 配本俱乐部打手规格（specs 传空数组表示清空）
    * @param {number} playerId
    * @param {Array<{gameId:number, all:boolean, specIds:number[]}>} specs

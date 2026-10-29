@@ -21,7 +21,7 @@
           <i class="copy-icon" title="复制订单号" @click="copyText(row.orderNo)" />
         </div>
         <div class="info-grid">
-          <div class="info-item"><label>订单金额(元)</label><span>{{ Number(row.amount).toFixed(2) }}</span></div>
+          <div class="info-item"><label>订单金额(元)</label><span>{{ Number(row.displayAmount).toFixed(2) }}</span></div>
           <div class="info-item"><label>购买项目</label><span>{{ row.product || '—' }}</span></div>
           <div v-if="row.assignService" class="info-item"><label>派单客服</label><span>{{ row.assignService }}</span></div>
           <div class="info-item">
@@ -53,8 +53,10 @@
         <div v-if="row.players.length" class="player-grid">
           <div v-for="(p, i) in row.players" :key="i" class="player-card">
             <p class="player-name">{{ p.name || '打手' }}（{{ p.id }}）</p>
-            <p class="player-club">{{ p.club }}</p>
-            <p class="player-time">{{ p.acceptTime ? `接单时间：${p.acceptTime}` : `转单时间：${p.transferTime}` }}</p>
+            <p class="player-club">{{ p.club || '—' }}（{{ p.id }}）</p>
+            <p v-if="p.acceptTime" class="player-time">接单时间：{{ p.acceptTime }}</p>
+            <p v-else-if="p.transferTime" class="player-time">转单时间：{{ p.transferTime }}</p>
+            <p v-else class="player-time">接单时间：—</p>
           </div>
         </div>
         <p v-else class="empty-text">接单后有值</p>
@@ -118,17 +120,17 @@
         <template v-if="hasVouchers">
           <div class="voucher-row">
             <div v-for="(v, i) in row.vouchers.first" :key="i" class="voucher-item">
-              <div class="voucher-thumb-box"><i class="upload-icon" /></div>
+              <div class="voucher-thumb-box"><img class="voucher-image" :src="v" alt="首图凭证" /></div>
               <p class="voucher-label">首图</p>
             </div>
             <div v-for="(v, i) in row.vouchers.last" :key="i" class="voucher-item">
-              <div class="voucher-thumb-box"><i class="upload-icon" /></div>
+              <div class="voucher-thumb-box"><img class="voucher-image" :src="v" alt="尾图凭证" /></div>
               <p class="voucher-label">尾图</p>
             </div>
           </div>
           <div v-if="row.vouchers.process.length" class="voucher-row">
             <div v-for="(p, i) in row.vouchers.process" :key="i" class="voucher-item">
-              <div class="voucher-thumb-box"><i class="upload-icon" /></div>
+              <div class="voucher-thumb-box"><img class="voucher-image" :src="p" :alt="`进程图${i + 1}`" /></div>
               <p class="voucher-label">进程图{{ i + 1 }}</p>
             </div>
           </div>
@@ -150,6 +152,8 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { clubOrderApi } from '../../../api/modules/clubOrder';
+import { mapOrderDetailFields } from '../../../utils/orderDetailFields';
+import { hydrateOrderPlayers, mapOrderPlayers } from '../../../utils/orderPlayers';
 
 const route = useRoute();
 const router = useRouter();
@@ -190,6 +194,7 @@ function mapOrder(o = {}) {
     orderNo: o.orderNo || '',
     customerTip: o.customerTip || '', // 接口未返回下单用户，预留
     amount: Number(o.amount) || 0,
+    displayAmount: actualAmount,
     product: o.itemName || '',
     gameName: o.gameName || '', // 接口仅返回 gameId，预留
     clientType: Array.isArray(o.clientType) ? o.clientType : [], // 接口暂未返回，预留
@@ -216,25 +221,15 @@ function mapOrder(o = {}) {
       secondW: 0,
       note: o.depositNote || '', // 接口暂未返回，预留
     },
-    players: Array.isArray(o.slots)
-      ? o.slots.map((s) => ({
-          name: '', // 接口未返回打手姓名，预留
-          id: s.playerId ?? '',
-          club: '', // 预留
-          acceptTime: '', // 预留
-          transferTime: '', // 预留
-        }))
-      : [],
+    players: mapOrderPlayers(o.players ?? o.slots),
     profit: {
       adjustText: clubAdjust ? `${clubAdjust > 0 ? '+' : ''}${clubAdjust.toFixed(2)}元` : '',
       clubShare: actualAmount.toFixed(2),
       playerShareText: '—', // 接口未返回分润明细，预留
       adjustInvalid: partialRefunded,
     },
-    logs: [], // 接口未返回订单日志，预留
-    vouchers: { first: [], last: [], process: [] }, // 接口未返回完成凭证，预留
+    ...mapOrderDetailFields(o),
     voucherTime: '',
-    playerRemark: o.playerRemark || '', // 预留
     rejectReason: o.rejectReason || '', // 预留
     orderRemark: o.orderRemark || '', // 预留
     // 后端 2026-10-26 确认字段名（Apifox 526320879 已同步）：
@@ -266,7 +261,9 @@ async function loadDetail() {
   loading.value = true;
   try {
     const data = await clubOrderApi.detail(id);
-    row.value = mapOrder(data || {});
+    const mapped = mapOrder(data || {});
+    mapped.players = await hydrateOrderPlayers(mapped.players);
+    row.value = mapped;
   } catch {
     row.value = null; // 错误已由 request.js toast；展示「订单不存在或已失效」
   } finally {
@@ -587,6 +584,7 @@ onMounted(loadDetail);
 }
 
 .voucher-thumb-box {
+  width: 100%;
   height: 96px;
   border: 1px dashed var(--border-color, rgba(255, 255, 255, 0.16));
   border-radius: 8px;
@@ -594,6 +592,13 @@ onMounted(loadDetail);
   align-items: center;
   justify-content: center;
   background: var(--bg-card, rgba(255, 255, 255, 0.03));
+  overflow: hidden;
+}
+
+.voucher-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .voucher-label {

@@ -68,9 +68,9 @@ async function fetchFixedProfits() {
     });
     fixedRows.value = Array.isArray(r?.list) ? r.list : [];
     fixedTotal.value = Number(r?.total) || 0;
+    return true;
   } catch {
-    fixedRows.value = [];
-    fixedTotal.value = 0;
+    return false;
   } finally {
     profitLoading.value = false;
   }
@@ -106,7 +106,7 @@ async function fetchConfig() {
   loading.value = true;
   try {
     const res = await clubConfigApi.get();
-    if (!res || typeof res !== 'object') return;
+    if (!res || typeof res !== 'object') return false;
     form.orderMode = mapPublicGrab(res.publicGrab);
     if (res.profitMode === 'PERCENT' || res.profitMode === 'FIXED') {
       profitMode.value = res.profitMode;
@@ -114,9 +114,10 @@ async function fetchConfig() {
     if (Number.isFinite(Number(res.playerRate))) playerRate.value = Number(res.playerRate);
     orderDirty.value = false;
     profitDirty.value = false;
-    if (profitMode.value === 'FIXED') await fetchFixedProfits();
+    return profitMode.value !== 'FIXED' || await fetchFixedProfits();
   } catch {
     // 错误提示已由 request.js 统一 toast
+    return false;
   } finally {
     loading.value = false;
   }
@@ -196,8 +197,12 @@ async function saveAll() {
     await Promise.all(tasks);
     orderDirty.value = false;
     profitDirty.value = false;
-    show('配置已保存', 'success');
-    if (profitMode.value === 'FIXED') fetchFixedProfits(); // 保存后刷新 configured 状态
+    const refreshed = await fetchConfig();
+    if (refreshed) {
+      show('配置已保存', 'success');
+    } else {
+      show('配置已保存，但刷新数据失败，请稍后重试', 'warning');
+    }
   } catch {
     // 后端错误已由 request.js toast；脏标记保留，可重试
   } finally {

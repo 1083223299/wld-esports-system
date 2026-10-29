@@ -16,7 +16,7 @@
    - **withdraw-rules**：dailyLimit/usedToday/remainToday/windowStart/windowEnd/inWindow/minAmount/…/showWithdraw，收益与押金同一结构（收益 minAmount=90、showWithdraw=true；押金 minAmount 空、showWithdraw 需退店满14天且未冻结才 true）。
 3. **前端已按上述定义全部改完并通过 `npm run build`**（详见第六节）。剩余待后端确认项见第三节。
 4. 差异记录：原型批注「打手分润 0≤值<100」，后端要求「大于0、小于100的整数」——**前端按后端口径校验 1-99**，如产品口径允许 0% 请告知。
-5. **【已解决】游戏名称/规格名称**：后端确认固定值表格名称已在 GET /api/club/settings/player-profits 的 list（gameName「三角洲行动」/ specName「护航」，表格用 gameName + " / " + specName 拼）；**GET /api/club/specs/mine 只返回授权的 gameId/specId、不要用它渲染这张表**。前端当前即按 player-profits list 渲染（名称直接显示、缺失回退 #ID），无需改动。
+5. **【已解决】游戏名称/规格名称**：后端确认固定值表格名称已在 GET /api/club/settings/player-profits 的 list（gameName「三角洲行动」/ specName「护航」，表格用 gameName + " / " + specName 拼）；**GET /api/club/specs/mine 只返回授权的 gameId/specId、不要用它渲染这张表**。前端当前即按 player-profits list 渲染（名称直接显示、缺失回退 #ID），无需改动。打手列表的“可接单规格”选择器也使用此接口的授权数据；接口不返回名称时展示真实 ID，不再使用本地 mock 或派生 ID。
 
 ---
 

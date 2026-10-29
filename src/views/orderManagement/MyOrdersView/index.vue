@@ -6,6 +6,8 @@ import DataTable from '../../../components/DataTable.vue';
 import SearchComponent from '../../../components/SearchComponent/index.vue';
 import { useToast } from '../../../composables/useToast';
 import { clubOrderApi } from '../../../api/modules/clubOrder';
+import { mapOrderDetailFields } from '../../../utils/orderDetailFields';
+import { hydrateOrderPlayers, mapOrderPlayers } from '../../../utils/orderPlayers';
 import { playerApi } from '../../../api/modules/player';
 import { PLAYER_OPTIONS } from './mockData';
 
@@ -231,6 +233,7 @@ function mapOrder(o = {}) {
     orderNo: o.orderNo || '',
     customerTip: o.customerTip || '', // 接口未返回下单用户，预留
     amount: Number(o.amount) || 0,
+    displayAmount: actualAmount,
     product: o.itemName || '',
     gameName: o.gameName || '', // 接口仅返回 gameId，预留
     clientType: Array.isArray(o.clientType) ? o.clientType : [], // 接口暂未返回，预留
@@ -258,25 +261,15 @@ function mapOrder(o = {}) {
       secondW: 0,
       note: o.depositNote || '', // 接口暂未返回，预留
     },
-    players: Array.isArray(o.slots)
-      ? o.slots.map((s) => ({
-          name: '', // 接口未返回打手姓名，预留
-          id: s.playerId ?? '',
-          club: '', // 预留
-          acceptTime: '', // 预留
-          transferTime: '', // 预留
-        }))
-      : [],
+    players: mapOrderPlayers(o.players ?? o.slots),
     profit: {
       adjustText: clubAdjust ? `${clubAdjust > 0 ? '+' : ''}${clubAdjust.toFixed(2)}元` : '',
       clubShare: actualAmount.toFixed(2),
       playerShareText: '—', // 接口未返回分润明细，预留
       adjustInvalid: partialRefunded,
     },
-    logs: [], // 接口未返回订单日志，预留
-    vouchers: { first: [], last: [], process: [] }, // 接口未返回完成凭证，预留
+    ...mapOrderDetailFields(o),
     voucherTime: '',
-    playerRemark: o.playerRemark || '', // 预留
     rejectReason: o.rejectReason || '', // 预留
     orderRemark: o.orderRemark || '', // 预留
     // 后端 2026-10-26 确认字段名（Apifox 526320879 已同步）：
@@ -403,6 +396,8 @@ async function loadDetail(id) {
     const data = await clubOrderApi.detail(id);
     if (seq !== detailRequestSeq) return;
     const mapped = mapOrder(data);
+    mapped.players = await hydrateOrderPlayers(mapped.players);
+    if (seq !== detailRequestSeq) return;
     detailCache.set(id, mapped);
     if (detailVisible.value && currentRow.value?.id === id) {
       currentRow.value = mapped;
@@ -466,6 +461,7 @@ async function confirmAdjust() {
       direction: adjustForm.type === 'add' ? 'INCREASE' : 'DECREASE',
       amount: amt,
     });
+    detailCache.delete(currentRow.value.id);
     adjustVisible.value = false;
     show(`${adjustForm.type === 'add' ? '加价' : '减价'} ¥${amt.toFixed(2)} 已提交`, 'success');
     await loadOrders();
@@ -573,7 +569,7 @@ function openRelation(row) {
 
       <!-- 金额 -->
       <template #cell-amount="{ row }">
-        <span class="amount-text">{{ Number(row.amount).toFixed(2) }}</span>
+        <span class="amount-text">{{ Number(row.displayAmount).toFixed(2) }}</span>
       </template>
 
       <!-- 项目 -->
@@ -630,7 +626,7 @@ function openRelation(row) {
             <i class="copy-icon" title="复制订单号" @click="copyText(currentRow.orderNo)" />
           </div>
           <div class="info-grid">
-            <div class="info-item"><label>订单金额(元)</label><span>{{ Number(currentRow.amount).toFixed(2) }}</span></div>
+            <div class="info-item"><label>订单金额(元)</label><span>{{ Number(currentRow.displayAmount).toFixed(2) }}</span></div>
             <div class="info-item"><label>购买项目</label><span>{{ currentRow.product || '—' }}</span></div>
             <div v-if="currentRow.assignService" class="info-item"><label>派单客服</label><span>{{ currentRow.assignService }}</span></div>
             <div class="info-item"><label>订单状态</label><span>{{ STATUS_TEXT[currentRow.orderStatus] || currentRow.orderStatus }}<template v-if="currentRow.orderStatus === 'pending'">({{ currentRow.claimedCount }}/{{ currentRow.requiredCount }})</template></span></div>
@@ -659,8 +655,10 @@ function openRelation(row) {
           <div v-if="currentRow.players.length" class="player-grid">
             <div v-for="(p, i) in currentRow.players" :key="i" class="player-card">
               <p class="player-name">{{ p.name || '打手' }}（{{ p.id }}）</p>
-              <p class="player-club">{{ p.club }}</p>
-              <p class="player-time">{{ p.acceptTime ? `接单时间：${p.acceptTime}` : `转单时间：${p.transferTime}` }}</p>
+              <p class="player-club">{{ p.club || '—' }}（{{ p.id }}）</p>
+              <p v-if="p.acceptTime" class="player-time">接单时间：{{ p.acceptTime }}</p>
+              <p v-else-if="p.transferTime" class="player-time">转单时间：{{ p.transferTime }}</p>
+              <p v-else class="player-time">接单时间：—</p>
             </div>
           </div>
           <p v-else class="empty-text">接单后有值</p>
@@ -724,17 +722,17 @@ function openRelation(row) {
           <template v-if="hasVouchers">
             <div class="voucher-row">
               <div v-for="(v, i) in currentRow.vouchers.first" :key="i" class="voucher-item">
-                <div class="voucher-thumb-box"><i class="upload-icon" /></div>
+                <div class="voucher-thumb-box"><img class="voucher-image" :src="v" alt="首图凭证" /></div>
                 <p class="voucher-label">首图</p>
               </div>
               <div v-for="(v, i) in currentRow.vouchers.last" :key="i" class="voucher-item">
-                <div class="voucher-thumb-box"><i class="upload-icon" /></div>
+                <div class="voucher-thumb-box"><img class="voucher-image" :src="v" alt="尾图凭证" /></div>
                 <p class="voucher-label">尾图</p>
               </div>
             </div>
             <div v-if="currentRow.vouchers.process.length" class="voucher-row">
               <div v-for="(p, i) in currentRow.vouchers.process" :key="i" class="voucher-item">
-                <div class="voucher-thumb-box"><i class="upload-icon" /></div>
+                <div class="voucher-thumb-box"><img class="voucher-image" :src="p" :alt="`进程图${i + 1}`" /></div>
                 <p class="voucher-label">进程图{{ i + 1 }}</p>
               </div>
             </div>
@@ -1080,6 +1078,7 @@ function openRelation(row) {
 }
 
 .voucher-thumb-box {
+  width: 100%;
   height: 96px;
   border: 1px dashed var(--border-color, rgba(255, 255, 255, 0.16));
   border-radius: 8px;
@@ -1087,6 +1086,13 @@ function openRelation(row) {
   align-items: center;
   justify-content: center;
   background: var(--bg-card, rgba(255, 255, 255, 0.03));
+  overflow: hidden;
+}
+
+.voucher-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .voucher-label {

@@ -1,6 +1,7 @@
 import { config } from '../config/env';
 import { getToken, removeToken } from '../utils/auth';
 import { useToast } from '../composables/useToast';
+import { ElMessageBox } from 'element-plus';
 
 const BASE_URL = config.apibaseURL;
 const TIMEOUT = config.timeout || 8000;
@@ -9,6 +10,16 @@ const requestInterceptors = {
   before: [],
   after: [],
 };
+
+let authFailurePrompted = false;
+let authPromptPromise = null;
+let authFailureToastAt = 0;
+
+window.addEventListener('auth:restored', () => {
+  authFailurePrompted = false;
+  authPromptPromise = null;
+  authFailureToastAt = 0;
+});
 
 export function addRequestInterceptor(fn) {
   requestInterceptors.before.push(fn);
@@ -23,9 +34,56 @@ function notifyError(message) {
   show(message, 'error');
 }
 
-async function http({ url, method = 'GET', data, headers = {} }) {
+async function handleUnauthorized(errorMessage) {
+  if (!getToken()) {
+    notifyError(errorMessage);
+    return;
+  }
+
+  if (!authFailurePrompted) {
+    authFailurePrompted = true;
+    window.dispatchEvent(new CustomEvent('auth:expired'));
+    authPromptPromise = ElMessageBox.confirm(
+      '当前登录状态已失效，部分操作无法继续。选择“留在当前页”可继续查看页面，但账号功能需要重新登录后才能恢复。',
+      '账号状态异常',
+      {
+        confirmButtonText: '退出登录',
+        cancelButtonText: '留在当前页',
+        distinguishCancelAndClose: true,
+        closeOnClickModal: false,
+        closeOnPressEscape: false,
+        type: 'warning',
+      },
+    )
+      .then(() => {
+        removeToken();
+        window.location.hash = '#/login';
+      })
+      .catch(() => {})
+      .finally(() => {
+        authPromptPromise = null;
+      });
+  }
+
+  if (authPromptPromise) {
+    await authPromptPromise;
+    return;
+  }
+
+  const now = Date.now();
+  if (now - authFailureToastAt > 3000) {
+    authFailureToastAt = now;
+    notifyError('账号登录状态异常，当前操作未完成');
+  }
+}
+
+async function http({ url, method = 'GET', data, headers = {}, timeout = TIMEOUT }) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeout);
 
   // FormData（文件上传）不走 JSON 序列化，且 Content-Type 交由浏览器自动带 boundary
   const isFormData = typeof FormData !== 'undefined' && data instanceof FormData;
@@ -91,15 +149,8 @@ async function http({ url, method = 'GET', data, headers = {} }) {
     };
 
     if (unauthorized) {
-      // 已有登录态：清 token 并跳回登录页；登录页（无 token）只提示，不跳转
-      if (getToken()) {
-        removeToken();
-        window.location.hash = '#/login';
-      }
-      // 登录失效信号：notify 通道（未读轮询 / ws 重连）监听后停止空转，避免持续刷 401
-      window.dispatchEvent(new CustomEvent('auth:expired'));
       notified = true;
-      notifyError(errorMessage);
+      await handleUnauthorized(errorMessage);
       throw attachErrorMeta(new Error(errorMessage));
     }
 
@@ -118,11 +169,14 @@ async function http({ url, method = 'GET', data, headers = {} }) {
 
     return result;
   } catch (error) {
-    const message = error?.message || '请求失败';
+    const requestError = timedOut
+      ? new Error(`请求超时（${timeout / 1000}秒），请稍后重试`)
+      : error;
+    const message = requestError?.message || '请求失败';
     if (!notified) {
       notifyError(message);
     }
-    throw error;
+    throw requestError;
   } finally {
     clearTimeout(timer);
   }
@@ -139,6 +193,7 @@ export const request = {
   mock,
   get: (url, headers) => http({ url, method: 'GET', headers }),
   post: (url, data, headers) => http({ url, method: 'POST', data, headers }),
-  put: (url, data, headers) => http({ url, method: 'PUT', data, headers }),
+  put: (url, data, headers, options = {}) =>
+    http({ url, method: 'PUT', data, headers, ...options }),
   del: (url, headers) => http({ url, method: 'DELETE', headers }),
 };

@@ -6,7 +6,6 @@ import SearchComponent from '../../../components/SearchComponent/index.vue';
 import { useToast } from '../../../composables/useToast';
 import { useUserStore } from '../../../stores/user';
 import { playerApi } from '../../../api/modules/player';
-import { gameApi } from '../../../api/modules/game';
 
 const { show } = useToast();
 const userStore = useUserStore();
@@ -30,24 +29,78 @@ const editingId = ref(null); // null = 新增
 /** 弹窗提交中（防重复提交） */
 const submitting = ref(false);
 
-// ===== 可接单规格：游戏及规格选项（数据源：游戏管理 mock DB） =====
+// ===== 可接单规格：只使用后端返回的本俱乐部授权游戏/规格 =====
 const gameOptions = ref([]);
+const specsLoading = ref(false);
+const ALL_SPEC_ID = 'ALL'; // UI 选项标记，不作为 specId 发送给后端
 
-/**
- * 规格 ID 派生（占位）：当前游戏/规格下拉仍来自游戏管理 mock（gameApi.all），
- * 后端规格表接口就绪前，按 gameId*100+序号 派生稳定整数 ID；
- * 接入真实「游戏规格列表」接口后，仅需替换 gameOptions 数据源即可。
- */
-const ALL_SPEC_ID = 0; // 「全部」哨兵值：all=true 的 UI 表示
-const specIdOf = (game, idx) => Number(game.id) * 100 + (idx + 1);
+function invalidAvailableSpecsResponse(message) {
+  const error = new Error(message);
+  error.code = 'INVALID_AVAILABLE_SPECS_RESPONSE';
+  return error;
+}
+
+function normalizeAvailableSpecs(data) {
+  const source = Array.isArray(data) ? data : Array.isArray(data?.list) ? data.list : null;
+  if (!source) {
+    throw invalidAvailableSpecsResponse(
+      '可接单规格接口未返回有效数据，请后端确认 /api/club/specs/mine 返回授权的 gameId、specId'
+    );
+  }
+
+  const games = new Map();
+  source.forEach((item) => {
+    if (!item || typeof item !== 'object') {
+      throw invalidAvailableSpecsResponse('可接单规格接口包含无效数据，请后端检查响应');
+    }
+    const gameId = Number(item?.gameId);
+    if (!Number.isSafeInteger(gameId) || gameId <= 0) {
+      throw invalidAvailableSpecsResponse('可接单规格接口返回了无效游戏ID，请后端检查响应');
+    }
+    if (item.specIds !== undefined && !Array.isArray(item.specIds)) {
+      throw invalidAvailableSpecsResponse(`游戏ID ${gameId} 的规格数据格式错误，请后端检查响应`);
+    }
+
+    if (!games.has(gameId)) {
+      games.set(gameId, {
+        id: gameId,
+        name: item.gameName ? String(item.gameName) : `游戏ID ${gameId}`,
+        all: item.all === true || Number(item.all) === 1,
+        specs: new Map(),
+      });
+    }
+
+    const game = games.get(gameId);
+    if (item.all === true || Number(item.all) === 1) game.all = true;
+    if (item.gameName) game.name = String(item.gameName);
+
+    const specs = Array.isArray(item.specIds) ? [...item.specIds] : [];
+    if (item.specId !== undefined && item.specId !== null) {
+      specs.push({ specId: item.specId, specName: item.specName });
+    }
+    specs.forEach((spec) => {
+      const specId = Number(spec && typeof spec === 'object' ? spec.specId ?? spec.id : spec);
+      if (!Number.isSafeInteger(specId) || specId <= 0) {
+        throw invalidAvailableSpecsResponse(`游戏ID ${gameId} 的规格ID无效，请后端检查响应`);
+      }
+      const specName =
+        spec && typeof spec === 'object' && (spec.specName || spec.name)
+          ? String(spec.specName || spec.name)
+          : `规格ID ${specId}`;
+      game.specs.set(specId, { label: specName, value: specId });
+    });
+  });
+
+  return [...games.values()].map((game) => ({
+    ...game,
+    specs: [...game.specs.values()],
+  }));
+}
 
 const specOptionsOf = (gameId) => {
   const game = gameOptions.value.find((g) => Number(g.id) === Number(gameId));
-  if (!game) return [{ label: '全部', value: ALL_SPEC_ID }];
-  return [
-    { label: '全部', value: ALL_SPEC_ID },
-    ...game.specs.map((s, idx) => ({ label: s, value: specIdOf(game, idx) })),
-  ];
+  if (!game) return [];
+  return [...(game.all ? [{ label: '全部', value: ALL_SPEC_ID }] : []), ...game.specs];
 };
 
 // ===== 后端打手字段 → 页面字段映射 =====
@@ -91,7 +144,7 @@ const editForm = reactive({
   name: '',
   phone: '',
   password: '',
-  specRows: [], // [{ gameId, specIds: number[] }]，specIds 含 ALL_SPEC_ID 表示「全部」
+  specRows: [], // [{ gameId, specIds: Array<number|string> }]，ALL_SPEC_ID 表示授权的全部规格
 });
 
 /* ================= 列表加载（服务端分页） ================= */
@@ -224,8 +277,7 @@ function toApiSpecs(specRows) {
       return {
         gameId: Number(r.gameId),
         all: hasAll,
-        // all=true 或为空表示该游戏全部规格
-        specIds: hasAll ? [] : ids.filter((id) => id !== ALL_SPEC_ID),
+        specIds: hasAll ? [] : ids.filter((id) => id !== ALL_SPEC_ID).map(Number),
       };
     });
 }
@@ -236,7 +288,9 @@ function fromApiSpecs(list) {
     .filter((s) => s && s.gameId !== null && s.gameId !== undefined)
     .map((s) => ({
       gameId: Number(s.gameId),
-      specIds: s.all ? [ALL_SPEC_ID] : [...(s.specIds || [])],
+      specIds: s.all === true || Number(s.all) === 1
+        ? [ALL_SPEC_ID]
+        : (s.specIds || []).map(Number),
     }));
 }
 
@@ -247,7 +301,7 @@ function openCreate() {
     name: '',
     phone: '',
     password: '',
-    specRows: [{ gameId: null, specIds: [ALL_SPEC_ID] }],
+    specRows: [{ gameId: null, specIds: [] }],
   });
   editDialogVisible.value = true;
 }
@@ -258,7 +312,7 @@ async function openEdit(row) {
     name: row.name,
     phone: row.phone || '',
     password: '', // 编辑时留空表示不修改密码
-    specRows: [{ gameId: null, specIds: [ALL_SPEC_ID] }],
+    specRows: [{ gameId: null, specIds: [] }],
   });
   editDialogVisible.value = true;
   // 拉取该打手已配置规格（按游戏分组），失败不阻塞弹窗
@@ -266,14 +320,14 @@ async function openEdit(row) {
     const specs = await playerApi.getSpecs(row.id);
     const rowsFromApi = fromApiSpecs(specs);
     editForm.specRows =
-      rowsFromApi.length > 0 ? rowsFromApi : [{ gameId: null, specIds: [ALL_SPEC_ID] }];
+      rowsFromApi.length > 0 ? rowsFromApi : [{ gameId: null, specIds: [] }];
   } catch {
     // 错误提示已由 request.js 统一 toast，保留默认空行
   }
 }
 
 function addSpecRow() {
-  editForm.specRows.push({ gameId: null, specIds: [ALL_SPEC_ID] });
+  editForm.specRows.push({ gameId: null, specIds: [] });
 }
 
 function removeSpecRow(idx) {
@@ -285,7 +339,8 @@ function removeSpecRow(idx) {
 }
 
 function handleSpecRowGameChange(row) {
-  row.specIds = [ALL_SPEC_ID]; // 切换游戏后重置规格为「全部」
+  const game = gameOptions.value.find((item) => Number(item.id) === Number(row.gameId));
+  row.specIds = game?.all ? [ALL_SPEC_ID] : [];
 }
 
 function handleSpecChange(row) {
@@ -398,15 +453,24 @@ async function confirmLeave() {
   }
 }
 
-onMounted(async () => {
-  // 游戏/规格选项（当前为 mock，规格 ID 为占位派生值）
+async function loadAvailableSpecs() {
+  specsLoading.value = true;
   try {
-    const games = await gameApi.all();
-    gameOptions.value = games || [];
+    gameOptions.value = normalizeAvailableSpecs(await playerApi.getMyAvailableSpecs());
   } catch (e) {
-    show(e?.message || '游戏列表加载失败', 'error');
+    gameOptions.value = [];
+    // request.js already displays transport/business errors; only report local response parsing errors here.
+    if (e?.code === 'INVALID_AVAILABLE_SPECS_RESPONSE') {
+      show(e.message, 'error');
+    }
+  } finally {
+    specsLoading.value = false;
   }
+}
+
+onMounted(() => {
   loadPlayers();
+  loadAvailableSpecs();
 });
 </script>
 
@@ -480,7 +544,8 @@ onMounted(async () => {
             <el-select
               v-model="row.gameId"
               class="spec-game"
-              placeholder="请选择游戏"
+              :placeholder="specsLoading ? '加载中…' : '请选择游戏'"
+              :disabled="specsLoading || !gameOptions.length"
               filterable
               @change="handleSpecRowGameChange(row)"
             >
@@ -490,6 +555,7 @@ onMounted(async () => {
               v-model="row.specIds"
               class="spec-multi"
               placeholder="请选择规格（可多选）"
+              :disabled="specsLoading || !specOptionsOf(row.gameId).length"
               multiple
               collapse-tags
               @change="handleSpecChange(row)"

@@ -55,5 +55,5 @@ export const clubConfigApi = {
    * @param {{items:Array<{specId:number, playerFixed:number}>}} payload
    */
   savePlayerProfits: (payload = {}) =>
-    request.put('/api/club/settings/player-profits', payload),
+     request.put('/api/club/settings/player-profits', payload, undefined, { timeout: 50000 }),
 };

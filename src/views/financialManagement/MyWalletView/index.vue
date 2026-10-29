@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import AppModal from '../../../components/AppModal.vue';
 import DataTable from '../../../components/DataTable.vue';
 import { useToast } from '../../../composables/useToast';
@@ -18,6 +19,7 @@ import { WITHDRAW_RULES, FLOW_TYPE_TEXT } from './mockData';
  * 说明：收款信息接口未下发，前端本地持久化；当天提交次数后端未下发，前端按天计数。
  */
 const { show } = useToast();
+const router = useRouter();
 
 /* ================= 实名状态（GET /api/club/me） ================= */
 const realNameVerified = ref(false);
@@ -198,16 +200,28 @@ const columns = [
   { key: 'time', title: '时间' },
 ];
 
-/** 后端流水字段 → 表格字段映射（bizType 优先走原型文案映射，未知值原样展示） */
+/** 后端流水字段 → 表格字段映射（优先展示后端提供的中文类型名） */
 function mapTxn(t = {}) {
   return {
     id: t.id,
-    typeText: FLOW_TYPE_TEXT[t.bizType] || t.bizType || '',
+    typeText: t.bizTypeLabel || FLOW_TYPE_TEXT[t.bizType] || t.bizType || '',
     amount: Number(t.amount) || 0,
+    orderId: t.orderId ?? null,
     relationNo: t.orderNo || '',
     reason: t.reason || '',
     time: t.createdAt || '',
   };
+}
+
+function openRelatedOrder(row) {
+  if (row.orderId !== null && row.orderId !== undefined && row.orderId !== '') {
+    router.push(`/orders/order-detail/${encodeURIComponent(row.orderId)}`);
+    return;
+  }
+  router.push({
+    path: '/orders/my-orders',
+    query: { orderNo: row.relationNo, openDetail: '1' },
+  });
 }
 
 async function loadTxns() {
@@ -488,7 +502,12 @@ onMounted(() => {
             </span>
           </template>
           <template #cell-relationNo="{ row }">
-            <a v-if="row.relationNo" class="relation-link">{{ row.relationNo }}</a>
+            <a
+              v-if="row.relationNo"
+              class="relation-link"
+              href="#"
+              @click.prevent="openRelatedOrder(row)"
+            >{{ row.relationNo }}</a>
             <span v-else class="muted-text">—</span>
           </template>
           <template #cell-reason="{ row }">
