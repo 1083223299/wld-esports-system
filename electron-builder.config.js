@@ -39,16 +39,13 @@ module.exports = {
     ...packageJson.build.win,
     signAndEditExecutable: false,
   },
-  afterPack: path.join(__dirname, 'scripts', 'after-pack-win.cjs'),
+  // 打包后钩子统一入口：Windows 仍转给 after-pack-win.cjs（逻辑未改），mac 走 ad-hoc 签名
+  // （electron-builder 认不出 identity: '-'，会直接跳过签名，所以必须自己在钩子里执行 codesign）
+  afterPack: path.join(__dirname, 'scripts', 'after-pack.cjs'),
   // macOS：Dock / 启动台显示中文名 + 支持 1024 专用图标，产物名与 Windows 均不受影响
   mac: {
     ...packageJson.build.mac,
-    // 没有 Developer ID 证书时用 ad-hoc 签名（identity: '-'）：
-    // arm64 上"完全未签名"的二进制会被内核拒绝执行，表现为"已损坏，无法打开 / 移到废纸篓"，
-    // 清隔离属性（xattr）也无效。ad-hoc 签名后至少能正常启动（首次仍需右键打开）。
-    // 将来配好证书（CSC_LINK 等）后删掉 identity 这一行即可回到正式签名 + 公证。
-    identity: '-',
-    // ad-hoc 无法公证，关掉硬运行时，避免库校验导致启动崩溃；正式签名时改回 true（package.json 里仍是 true）
+    // ad-hoc 签名无法公证，关掉硬运行时，避免库校验导致启动崩溃；正式签名时改回 true（package.json 里仍是 true）
     hardenedRuntime: false,
     // 有 build/icon-mac.png（1024 画布）时优先用它，否则回退通用图标
     icon: fs.existsSync(path.join(__dirname, 'build', 'icon-mac.png'))
