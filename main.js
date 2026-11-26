@@ -452,8 +452,12 @@ async function requestQuitWithUpdateCheck() {
 }
 
 /* ================= 托盘图标：角标气泡 + 整体闪动（系统通知提醒） ================= */
-const NORMAL_TRAY_ICON = path.join(__dirname, 'src', 'assets', 'images', 'logo16.png'); // 正常托盘图标
-const FLASH_TRAY_ICON = path.join(__dirname, 'src', 'assets', 'images', ''); // 闪动变体（整体发光，微信式闪动）
+const NORMAL_TRAY_ICON = path.join(__dirname, 'src', 'assets', 'images', 'logo16.png'); // 正常托盘图标（Windows 16px 彩色）
+// 闪动变体（白底卡片发光，微信式闪动）：这里必须写完整文件名。
+// 之前路径末尾是空字符串（指向 images 目录），createFromPath 会拿到空图，
+// 闪动时 tray.setImage(空图) 在 macOS 上会把菜单栏图标压成 0 宽 —— 图标直接看不见。
+const FLASH_TRAY_ICON = path.join(__dirname, 'src', 'assets', 'images', 'tray-flash.png');
+const MAC_TRAY_ICON = path.join(__dirname, 'src', 'assets', 'images', 'logo32.png'); // mac 菜单栏图标源图（32px，缩放到 18pt）
 // const ALERT_TRAY_ICON = path.join(__dirname, 'src', 'assets', 'images', 'tray-alert.png'); // 兜底提醒图标（红点）
 let normalTrayImage = null; // 正常图标缓存
 let flashTrayImage = null; // 闪动变体缓存
@@ -491,9 +495,15 @@ function stopTrayFlash() {
  */
 function startTrayFlash() {
   if (!tray) return;
-  normalTrayImage = normalTrayImage || nativeImage.createFromPath(NORMAL_TRAY_ICON);
+  // 兜底：基础图标缺失时用 mac 的 32px 源图，避免任何空图进入 setImage
+  if (!normalTrayImage || normalTrayImage.isEmpty()) {
+    normalTrayImage = nativeImage.createFromPath(MAC_TRAY_ICON);
+    if (normalTrayImage.isEmpty()) normalTrayImage = nativeImage.createFromPath(NORMAL_TRAY_ICON);
+  }
   flashTrayImage = flashTrayImage || nativeImage.createFromPath(FLASH_TRAY_ICON);
-  alertTrayImage = alertTrayImage || nativeImage.createFromPath(NORMAL_TRAY_ICON);
+  // 兜底：闪动变体读不到就退回正常图标（宁可只闪 tooltip，也不能让图标消失）
+  if (flashTrayImage.isEmpty()) flashTrayImage = normalTrayImage;
+  alertTrayImage = alertTrayImage || normalTrayImage;
 
   if (!trayFlashTimer) {
     let showFlash = false;
@@ -1065,9 +1075,17 @@ function setupNotifyBridge() {
     const count = Number(payload.count) || 0;
     trayUnread = count;
 
-    // mac 用 Dock 徽标数字（更符合 mac 使用习惯）；Windows 继续用托盘角标气泡
-    if (process.platform === 'darwin' && app.dock && typeof app.dock.setBadge === 'function') {
-      app.dock.setBadge(count > 0 ? String(count) : '');
+    // mac 用 Dock 徽标数字（更符合 mac 使用习惯），并且不改菜单栏图标：
+    // 渲染进程生成的角标图是 256px 画布，直接塞进 mac 状态栏会撑大图标、挤掉相邻状态项，
+    // 所以 mac 上只更新 Dock 徽标 + tooltip，菜单栏图标保持固定形态。
+    if (process.platform === 'darwin') {
+      if (app.dock && typeof app.dock.setBadge === 'function') {
+        app.dock.setBadge(count > 0 ? String(count) : '');
+      }
+      trayBadgeImage = null; // mac 不使用托盘角标图
+      if (!trayFlashTimer) tray.setImage(currentTrayImage());
+      tray.setToolTip(currentTrayToolTip());
+      return;
     }
 
     if (count > 0 && payload.dataUrl) {
@@ -1393,17 +1411,27 @@ function setupMacMenu() {
 }
 
 function createTray() {
-  const iconPath = path.join(__dirname, 'src', 'assets', 'images', 'logo16.png');
-  let icon = nativeImage.createFromPath(iconPath);
+  let icon = nativeImage.createFromPath(NORMAL_TRAY_ICON);
 
   if (process.platform === 'darwin') {
     // mac 菜单栏高度 22pt：16px 图标在 Retina 下偏小发虚，
     // 改用 32px 源图缩放到 18pt 内容（其余留白由菜单栏自身处理）
-    const hiRes = nativeImage.createFromPath(path.join(__dirname, 'src', 'assets', 'images', 'logo32.png'));
-    icon = (hiRes.isEmpty() ? icon : hiRes).resize({ width: 18, height: 18 });
+    const hiRes = nativeImage.createFromPath(MAC_TRAY_ICON);
+    if (!hiRes.isEmpty()) icon = hiRes;
+    icon = icon.resize({ width: 18, height: 18 });
   }
 
-  tray = new Tray(icon);
+  // 兜底：图标读不到时写日志，避免"菜单栏/托盘没有图标"却查不到原因
+  if (icon.isEmpty()) {
+    console.error('[tray] 图标为空，请检查 src/assets/images 下的 logo16.png / logo32.png');
+  }
+
+  try {
+    tray = new Tray(icon);
+  } catch (e) {
+    console.error('[tray] 创建托盘失败:', (e && e.message) || e);
+    return;
+  }
 
   tray.setToolTip(APP_DISPLAY_NAME);
 
