@@ -654,7 +654,7 @@ function showTrayMenu(bounds) {
       alwaysOnTop: true,
       focusable: true,
       webPreferences: {
-        sandbox: true,
+        sandbox: false, // 同上：sandbox:true 会让该窗口渲染进程直接崩溃
         preload: path.join(__dirname, 'trayMenuPreload.js'),
       },
     });
@@ -921,7 +921,7 @@ function showNotifyBubble() {
       skipTaskbar: true,
       show: false,
       webPreferences: {
-        sandbox: true,
+        sandbox: false, // 本机关闭：开启 sandbox 时该轻量窗口渲染进程必崩（Chromium CHECK，exitCode -2147483645）；只加载本地 HTML，contextIsolation 仍开启
         preload: path.join(__dirname, 'notifyBubblePreload.js'),
       },
     });
@@ -934,6 +934,12 @@ function showNotifyBubble() {
 
   notifyBubble.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(notifyBubbleHtml(trayUnreadItems)));
   notifyBubble.showInactive(); // 不抢焦点
+  // Windows：隐藏窗口创建时 alwaysOnTop 参数常不生效（HWND 无 WS_EX_TOPMOST），
+  // 提示框会被后面的资源管理器/编辑器挡住，显示后再强制置顶一次
+  if (process.platform === 'win32') {
+    notifyBubble.setAlwaysOnTop(true, 'screen-saver');
+    notifyBubble.moveTop();
+  }
 }
 
 /** 冒泡小窗已显示时刷新内容（新消息到达 / 未读变化） */
