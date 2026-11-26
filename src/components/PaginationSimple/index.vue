@@ -6,11 +6,12 @@ const props = defineProps({
   currentPage: { type: Number, default: 1 },
   total: { type: Number, default: 0 },
   pageSize: { type: Number, default: 10 },
+  pageSizes: { type: Array, default: () => [10, 20, 50, 100] },
   selectedRows: { type: Array, default: () => [] },
   showBatchActions: { type: Boolean, default: true },
 });
 
-const emit = defineEmits(['current-change', 'batch-enable', 'batch-disable', 'clear-selection']);
+const emit = defineEmits(['current-change', 'page-size-change', 'batch-enable', 'batch-disable', 'clear-selection']);
 
 const jumpPage = ref(props.currentPage);
 
@@ -80,9 +81,11 @@ const clearSelection = () => emit('clear-selection');
       <el-pagination
         :current-page="currentPage"
         :page-size="pageSize"
+        :page-sizes="pageSizes"
         :total="total"
-        layout="prev, pager, next"
+        layout="sizes, prev, pager, next"
         @current-change="handleCurrentChange"
+        @size-change="(size) => emit('page-size-change', size)"
         class="pagination"
       />
 

@@ -1,12 +1,11 @@
-/* ============================================================
- * 列表页统一布局：自适应内容区高度 + 固定表格头 + 固定分页 + 中间滚动
- * ============================================================ */
+/* 列表页统一布局：自适应内容区高度 + 固定表格头 + 固定分页 + 中间滚动 */
 
 .list-page {
   height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* gap: 16px; */
   overflow: hidden;
 }
 
@@ -40,7 +39,7 @@
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  padding: 12px 18px;
+  padding: 8px 18px 7px;
   background: var(--bg-toolbar);
   border-bottom: 1px solid var(--border-soft);
 }
@@ -59,7 +58,7 @@
   min-height: 0;
   overflow: auto;
   background: var(--bg-table-body);
-  margin: 10px 12px 0;
+  margin: 8px 12px 0;
 }
 
 .list-page__body table {
@@ -116,18 +115,18 @@
 
 .list-page__body .empty {
   text-align: center;
-  padding: 56px 0 44px;
+  padding: 48px 0 36px;
   color: var(--text-sub, #8a94a6);
 }
 
 .list-page__body .empty img {
   width: 96px;
   opacity: 0.72;
-  filter: drop-shadow(0 12px 20px rgba(148, 163, 184, 0.16));
+  filter: drop-shadow(0 8px 16px rgba(148, 163, 184, 0.14));
 }
 
 .list-page__body .empty p {
-  margin: 14px 0 0;
+  margin: 12px 0 0;
   font-size: 14px;
   color: var(--text-sub);
 }
@@ -135,7 +134,7 @@
 /* 固定分页区 */
 .list-page__footer {
   flex: 0 0 auto;
-  padding: 10px 18px;
+  padding: 8px 18px 8px;
   border-top: 1px solid var(--border-soft);
   background: var(--bg-toolbar);
 }

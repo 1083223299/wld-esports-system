@@ -30,6 +30,7 @@ import { toasts } from '../composables/useToast';
   flex-direction: column;
   gap: 8px;
   align-items: center;
+  pointer-events: none;
 }
 .toast-item {
   padding: 9px 18px;

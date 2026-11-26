@@ -7,44 +7,9 @@
  *   emerald   翡翠流光
  *   rose      绯红烈焰
  *   nightgold 暗夜黑金（暗色）
- * 说明：为保持各浏览器渲染一致，仅使用 hex / rgba，
+ * 说明：兼容 Electron 23（Chromium 110），仅使用 hex / rgba，
  *       不使用 color-mix / light-dark / oklch。
  * ============================================================ */
-
-/* ---------- 全局通用令牌（不随主题变化） ---------- */
-:root {
-  /* 字体栈：优先现代中文字体，保证 Windows/macOS 渲染一致 */
-  --font-family: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
-    "Microsoft YaHei", "HarmonyOS Sans SC", "Source Han Sans SC", "Noto Sans CJK SC",
-    sans-serif;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-
-  /* 圆角体系 */
-  --radius-xs: 6px;
-  --radius-sm: 8px;
-  --radius: 10px;
-  --radius-md: 14px;
-  --radius-lg: 18px;
-  --radius-xl: 24px;
-
-  /* 字号阶梯 */
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-base: 13px;
-  --text-md: 14px;
-  --text-lg: 16px;
-  --text-xl: 20px;
-  --text-2xl: 28px;
-
-  /* 行高 */
-  --leading-tight: 1.3;
-  --leading-normal: 1.55;
-  --leading-relaxed: 1.8;
-
-  /* 过渡曲线 */
-  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-}
 
 /* ---------- 默认主题 · 紫夜星云（保持原视觉） ---------- */
 :root {
@@ -69,34 +34,22 @@
   --icon-invert: 1;
   --icon-filter: none;
 
-  /* 品牌渐变 */
-  --gradient-primary: linear-gradient(135deg, #7a83ff 0%, #6a35ff 100%);
-  --gradient-brand: linear-gradient(135deg, var(--primary) 0%, var(--primary-deep) 100%);
-  --gradient-accent: linear-gradient(135deg, #7a83ff 0%, #6a35ff 45%, #c957f4 100%);
-
   /* 表面 */
   --bg-page: #f4f9fd;
   --bg-app: #f4f9fd;
   --bg-card: #ffffff;
   --bg-elevated: #ffffff;
-  --bg-topbar: rgba(255, 255, 255, 0.72);
+  --bg-topbar: rgba(255, 255, 255, 0.78);
   --bg-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 255, 0.96));
   --bg-toolbar: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(246, 248, 255, 0.9));
   --bg-thead: linear-gradient(180deg, #f8f9ff 0%, #f2f4fb 100%);
   --bg-hover: #f7f5ff;
+  --bg-hover-solid: var(--bg-hover);
   --bg-stripe: rgba(246, 248, 255, 0.5);
   --bg-table-body: rgba(255, 255, 255, 0.35);
   --thead-color: #f6f6fb;
   --row-hover: linear-gradient(90deg, rgba(106, 53, 255, 0.06), rgba(143, 94, 255, 0.03));
-  --panel-glass: rgba(255, 255, 255, 0.9);
-
-  /* 页面氛围背景：顶部与底部的柔和光晕，让大面留白有呼吸感 */
-  --app-bg: radial-gradient(1100px 520px at 88% -12%, rgba(106, 53, 255, 0.09), transparent 62%),
-    radial-gradient(900px 460px at -12% 108%, rgba(56, 130, 246, 0.07), transparent 58%),
-    var(--bg-page);
-  --login-orb-1: rgba(138, 92, 255, 0.5);
-  --login-orb-2: rgba(56, 189, 248, 0.38);
-  --login-orb-3: rgba(236, 72, 153, 0.3);
+  --panel-glass: rgba(255, 255, 255, 0.92);
 
   /* 侧边栏 */
   --sidebar-bg-1: #fbfcff;
@@ -112,44 +65,38 @@
   --text-sidebar: #2a3043;
   --text-submenu: #4d5878;
 
-  /* 语义状态色（成功/警示/危险/信息/弱化） */
-  --status-success: #0f9f6e;
-  --status-success-bg: rgba(15, 159, 110, 0.1);
-  --status-warning: #b45309;
-  --status-warning-bg: rgba(245, 158, 11, 0.14);
-  --status-danger: #d92d20;
-  --status-danger-bg: rgba(217, 45, 32, 0.1);
-  --status-info: #175cd3;
-  --status-info-bg: rgba(59, 130, 246, 0.12);
-  --status-muted: #667085;
-  --status-muted-bg: rgba(102, 116, 133, 0.12);
-
   /* 边框 */
   --border: #e8ecf3;
   --border-soft: rgba(136, 146, 175, 0.15);
   --border-faint: rgba(148, 163, 184, 0.14);
   --border-strong: rgba(127, 139, 170, 0.18);
 
-  /* 阴影：分层柔和，增加悬浮层次感 */
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
-  --shadow: 0 4px 14px -2px rgba(16, 24, 40, 0.07), 0 2px 6px -2px rgba(16, 24, 40, 0.05);
-  --shadow-lg: 0 24px 56px -16px rgba(23, 16, 60, 0.22), 0 8px 24px -8px rgba(23, 16, 60, 0.12);
-  --panel-shadow: 0 14px 34px rgba(15, 23, 42, 0.05), 0 2px 6px rgba(15, 23, 42, 0.03),
-    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  /* 阴影 */
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 18px 32px rgba(30, 41, 59, 0.18);
+  --panel-shadow: 0 12px 28px rgba(15, 23, 42, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.8);
   --app-frame-border: #8100eb28;
 
   /* 滚动条 */
   --scrollbar-thumb: rgba(120, 130, 160, 0.35);
   --scrollbar-track: transparent;
 
-  /* 文本选中 */
-  --text-selection: rgba(106, 53, 255, 0.16);
-
   /* 品牌插图协调色（登录页背景 / 首页插画） */
   --login-g1: #fbc2eb;
   --login-g2: #a6c1ee;
-  --login-tint: linear-gradient(135deg, rgba(106, 53, 255, 0.1) 0%, rgba(147, 51, 234, 0.06) 100%);
-  --hero-tint: linear-gradient(180deg, rgba(244, 249, 253, 0) 0%, rgba(244, 249, 253, 0.1) 100%);
+  --login-tint: linear-gradient(135deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0) 100%);
+  --hero-tint: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0) 100%);
+
+  /* 表单控件（输入框 / 下拉 / 勾选框） */
+  --input-bg: #ffffff;
+  --input-bg-focus: #ffffff;
+  --input-border: #e8ecf3;
+  --input-border-hover: rgba(106, 53, 255, 0.35);
+  --input-focus-ring: rgba(106, 53, 255, 0.14);
+  --input-placeholder: #372b46;
+  --input-one-placeholder: #7f768b;
+  --control-border: #b9c2d0;
+  --warning-text: #7a5b00;
 }
 
 /* ---------- 深海科技蓝 ---------- */
@@ -174,15 +121,11 @@
   --icon-invert: 1;
   --icon-filter: none;
 
-  --gradient-primary: linear-gradient(135deg, #38bdf8 0%, #2563eb 100%);
-  --gradient-brand: linear-gradient(135deg, var(--primary) 0%, var(--primary-deep) 100%);
-  --gradient-accent: linear-gradient(135deg, #38bdf8 0%, #2563eb 45%, #1e40af 100%);
-
   --bg-page: #eef4fb;
   --bg-app: #eef4fb;
   --bg-card: #ffffff;
   --bg-elevated: #ffffff;
-  --bg-topbar: rgba(255, 255, 255, 0.74);
+  --bg-topbar: rgba(255, 255, 255, 0.8);
   --bg-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 253, 0.96));
   --bg-toolbar: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(240, 246, 253, 0.92));
   --bg-thead: linear-gradient(180deg, #f2f7fd 0%, #e9f1fb 100%);
@@ -191,14 +134,7 @@
   --bg-table-body: rgba(255, 255, 255, 0.35);
   --thead-color: #eef4fc;
   --row-hover: linear-gradient(90deg, rgba(37, 99, 235, 0.06), rgba(96, 165, 250, 0.03));
-  --panel-glass: rgba(255, 255, 255, 0.9);
-
-  --app-bg: radial-gradient(1100px 520px at 88% -12%, rgba(37, 99, 235, 0.1), transparent 62%),
-    radial-gradient(900px 460px at -12% 108%, rgba(56, 189, 248, 0.08), transparent 58%),
-    var(--bg-page);
-  --login-orb-1: rgba(56, 152, 255, 0.5);
-  --login-orb-2: rgba(34, 211, 238, 0.36);
-  --login-orb-3: rgba(30, 64, 175, 0.32);
+  --panel-glass: rgba(255, 255, 255, 0.92);
 
   --sidebar-bg-1: #f6faff;
   --sidebar-bg-2: #eaf2fd;
@@ -212,36 +148,31 @@
   --text-sidebar: #16324f;
   --text-submenu: #47617f;
 
-  --status-success: #067647;
-  --status-success-bg: rgba(22, 163, 74, 0.12);
-  --status-warning: #b54708;
-  --status-warning-bg: rgba(245, 158, 11, 0.16);
-  --status-danger: #d92d20;
-  --status-danger-bg: rgba(217, 45, 32, 0.1);
-  --status-info: #175cd3;
-  --status-info-bg: rgba(59, 130, 246, 0.12);
-  --status-muted: #667085;
-  --status-muted-bg: rgba(102, 116, 133, 0.12);
-
   --border: #e2eaf4;
   --border-soft: rgba(100, 130, 170, 0.15);
   --border-faint: rgba(120, 150, 190, 0.15);
   --border-strong: rgba(110, 140, 180, 0.2);
 
-  --shadow-sm: 0 1px 2px rgba(15, 40, 80, 0.05), 0 1px 3px rgba(15, 40, 80, 0.07);
-  --shadow: 0 4px 14px -2px rgba(15, 40, 80, 0.08), 0 2px 6px -2px rgba(15, 40, 80, 0.05);
-  --shadow-lg: 0 24px 56px -16px rgba(8, 32, 72, 0.24), 0 8px 24px -8px rgba(8, 32, 72, 0.14);
-  --panel-shadow: 0 14px 34px rgba(15, 40, 80, 0.06), 0 2px 6px rgba(15, 40, 80, 0.03),
-    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --shadow: 0 1px 3px rgba(15, 40, 80, 0.08);
+  --shadow-lg: 0 18px 32px rgba(15, 40, 80, 0.18);
+  --panel-shadow: 0 12px 28px rgba(15, 40, 80, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.8);
   --app-frame-border: rgba(37, 99, 235, 0.16);
 
   --scrollbar-thumb: rgba(96, 120, 160, 0.35);
-  --text-selection: rgba(37, 99, 235, 0.16);
 
   --login-g1: #cfe4ff;
   --login-g2: #8fb8f6;
   --login-tint: linear-gradient(135deg, rgba(59, 130, 246, 0.38) 0%, rgba(96, 165, 250, 0.26) 100%);
-  --hero-tint: linear-gradient(180deg, rgba(238, 244, 251, 0) 0%, rgba(238, 244, 251, 0.12) 100%);
+  --hero-tint: linear-gradient(180deg, rgba(37, 99, 235, 0.1) 0%, rgba(37, 99, 235, 0.05) 100%);
+
+  --input-bg: #ffffff;
+  --input-bg-focus: #ffffff;
+  --input-border: #dde6f2;
+  --input-border-hover: rgba(37, 99, 235, 0.4);
+  --input-focus-ring: rgba(37, 99, 235, 0.15);
+  --input-placeholder: #2f3641;
+  --input-one-placeholder: #8498ac;
+  --control-border: #a9b9cf;
 }
 
 /* ---------- 翡翠流光 ---------- */
@@ -266,15 +197,11 @@
   --icon-invert: 1;
   --icon-filter: none;
 
-  --gradient-primary: linear-gradient(135deg, #2dd4bf 0%, #0d9488 100%);
-  --gradient-brand: linear-gradient(135deg, var(--primary) 0%, var(--primary-deep) 100%);
-  --gradient-accent: linear-gradient(135deg, #2dd4bf 0%, #0d9488 45%, #115e59 100%);
-
   --bg-page: #effaf7;
   --bg-app: #effaf7;
   --bg-card: #ffffff;
   --bg-elevated: #ffffff;
-  --bg-topbar: rgba(255, 255, 255, 0.76);
+  --bg-topbar: rgba(255, 255, 255, 0.82);
   --bg-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(245, 251, 249, 0.96));
   --bg-toolbar: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(240, 249, 246, 0.92));
   --bg-thead: linear-gradient(180deg, #f0faf7 0%, #e6f5f0 100%);
@@ -283,14 +210,7 @@
   --bg-table-body: rgba(255, 255, 255, 0.35);
   --thead-color: #edf8f4;
   --row-hover: linear-gradient(90deg, rgba(13, 148, 136, 0.06), rgba(45, 212, 191, 0.03));
-  --panel-glass: rgba(255, 255, 255, 0.9);
-
-  --app-bg: radial-gradient(1100px 520px at 88% -12%, rgba(13, 148, 136, 0.09), transparent 62%),
-    radial-gradient(900px 460px at -12% 108%, rgba(45, 212, 191, 0.07), transparent 58%),
-    var(--bg-page);
-  --login-orb-1: rgba(20, 184, 166, 0.46);
-  --login-orb-2: rgba(45, 212, 191, 0.32);
-  --login-orb-3: rgba(13, 148, 136, 0.26);
+  --panel-glass: rgba(255, 255, 255, 0.92);
 
   --sidebar-bg-1: #f5fcfa;
   --sidebar-bg-2: #e8f6f2;
@@ -304,36 +224,31 @@
   --text-sidebar: #123c36;
   --text-submenu: #3d615c;
 
-  --status-success: #067647;
-  --status-success-bg: rgba(22, 163, 74, 0.12);
-  --status-warning: #b54708;
-  --status-warning-bg: rgba(245, 158, 11, 0.16);
-  --status-danger: #d92d20;
-  --status-danger-bg: rgba(217, 45, 32, 0.1);
-  --status-info: #175cd3;
-  --status-info-bg: rgba(59, 130, 246, 0.12);
-  --status-muted: #667085;
-  --status-muted-bg: rgba(102, 116, 133, 0.12);
-
   --border: #d9ebe8;
   --border-soft: rgba(90, 140, 132, 0.15);
   --border-faint: rgba(90, 140, 132, 0.14);
   --border-strong: rgba(90, 140, 132, 0.2);
 
-  --shadow-sm: 0 1px 2px rgba(10, 70, 60, 0.05), 0 1px 3px rgba(10, 70, 60, 0.07);
-  --shadow: 0 4px 14px -2px rgba(10, 70, 60, 0.08), 0 2px 6px -2px rgba(10, 70, 60, 0.05);
-  --shadow-lg: 0 24px 56px -16px rgba(6, 60, 50, 0.24), 0 8px 24px -8px rgba(6, 60, 50, 0.14);
-  --panel-shadow: 0 14px 34px rgba(10, 70, 60, 0.06), 0 2px 6px rgba(10, 70, 60, 0.03),
-    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --shadow: 0 1px 3px rgba(10, 70, 60, 0.08);
+  --shadow-lg: 0 18px 32px rgba(10, 70, 60, 0.18);
+  --panel-shadow: 0 12px 28px rgba(10, 70, 60, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.8);
   --app-frame-border: rgba(13, 148, 136, 0.16);
 
   --scrollbar-thumb: rgba(90, 140, 132, 0.35);
-  --text-selection: rgba(13, 148, 136, 0.16);
 
   --login-g1: #d1f5ea;
   --login-g2: #7fe3cf;
   --login-tint: linear-gradient(135deg, rgba(20, 184, 166, 0.32) 0%, rgba(45, 212, 191, 0.22) 100%);
-  --hero-tint: linear-gradient(180deg, rgba(239, 250, 247, 0) 0%, rgba(239, 250, 247, 0.12) 100%);
+  --hero-tint: linear-gradient(180deg, rgba(13, 148, 136, 0.1) 0%, rgba(13, 148, 136, 0.05) 100%);
+
+  --input-bg: #ffffff;
+  --input-bg-focus: #ffffff;
+  --input-border: #d7eae6;
+  --input-border-hover: rgba(13, 148, 136, 0.4);
+  --input-focus-ring: rgba(13, 148, 136, 0.15);
+  --input-placeholder: #33413d;
+  --input-one-placeholder: #7daa88;
+  --control-border: #9ebdb6;
 }
 
 /* ---------- 绯红烈焰 ---------- */
@@ -358,15 +273,11 @@
   --icon-invert: 1;
   --icon-filter: none;
 
-  --gradient-primary: linear-gradient(135deg, #fb7185 0%, #e11d48 100%);
-  --gradient-brand: linear-gradient(135deg, var(--primary) 0%, var(--primary-deep) 100%);
-  --gradient-accent: linear-gradient(135deg, #fb7185 0%, #e11d48 45%, #9f1239 100%);
-
   --bg-page: #fdf2f4;
   --bg-app: #fdf2f4;
   --bg-card: #ffffff;
   --bg-elevated: #ffffff;
-  --bg-topbar: rgba(255, 255, 255, 0.78);
+  --bg-topbar: rgba(255, 255, 255, 0.84);
   --bg-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(253, 247, 248, 0.96));
   --bg-toolbar: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(252, 243, 245, 0.92));
   --bg-thead: linear-gradient(180deg, #fdf2f4 0%, #f8e8ec 100%);
@@ -375,14 +286,7 @@
   --bg-table-body: rgba(255, 255, 255, 0.35);
   --thead-color: #f9eef1;
   --row-hover: linear-gradient(90deg, rgba(225, 29, 72, 0.06), rgba(251, 113, 133, 0.03));
-  --panel-glass: rgba(255, 255, 255, 0.9);
-
-  --app-bg: radial-gradient(1100px 520px at 88% -12%, rgba(225, 29, 72, 0.08), transparent 62%),
-    radial-gradient(900px 460px at -12% 108%, rgba(251, 113, 133, 0.06), transparent 58%),
-    var(--bg-page);
-  --login-orb-1: rgba(244, 63, 94, 0.46);
-  --login-orb-2: rgba(251, 113, 133, 0.32);
-  --login-orb-3: rgba(225, 29, 72, 0.26);
+  --panel-glass: rgba(255, 255, 255, 0.92);
 
   --sidebar-bg-1: #fef7f8;
   --sidebar-bg-2: #faecef;
@@ -396,36 +300,31 @@
   --text-sidebar: #4a1d2b;
   --text-submenu: #7c4555;
 
-  --status-success: #067647;
-  --status-success-bg: rgba(22, 163, 74, 0.12);
-  --status-warning: #b54708;
-  --status-warning-bg: rgba(245, 158, 11, 0.16);
-  --status-danger: #b42318;
-  --status-danger-bg: rgba(217, 45, 32, 0.1);
-  --status-info: #175cd3;
-  --status-info-bg: rgba(59, 130, 246, 0.12);
-  --status-muted: #667085;
-  --status-muted-bg: rgba(102, 116, 133, 0.12);
-
   --border: #f0dfe4;
   --border-soft: rgba(170, 100, 120, 0.15);
   --border-faint: rgba(170, 100, 120, 0.14);
   --border-strong: rgba(170, 100, 120, 0.2);
 
-  --shadow-sm: 0 1px 2px rgba(120, 30, 50, 0.05), 0 1px 3px rgba(120, 30, 50, 0.07);
-  --shadow: 0 4px 14px -2px rgba(120, 30, 50, 0.08), 0 2px 6px -2px rgba(120, 30, 50, 0.05);
-  --shadow-lg: 0 24px 56px -16px rgba(90, 16, 40, 0.24), 0 8px 24px -8px rgba(90, 16, 40, 0.14);
-  --panel-shadow: 0 14px 34px rgba(120, 30, 50, 0.06), 0 2px 6px rgba(120, 30, 50, 0.03),
-    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --shadow: 0 1px 3px rgba(120, 30, 50, 0.08);
+  --shadow-lg: 0 18px 32px rgba(120, 30, 50, 0.18);
+  --panel-shadow: 0 12px 28px rgba(120, 30, 50, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.8);
   --app-frame-border: rgba(225, 29, 72, 0.16);
 
   --scrollbar-thumb: rgba(170, 100, 120, 0.35);
-  --text-selection: rgba(225, 29, 72, 0.16);
 
   --login-g1: #ffe4e8;
   --login-g2: #ffa9bc;
   --login-tint: linear-gradient(135deg, rgba(244, 63, 94, 0.32) 0%, rgba(251, 113, 133, 0.22) 100%);
-  --hero-tint: linear-gradient(180deg, rgba(253, 242, 244, 0) 0%, rgba(253, 242, 244, 0.12) 100%);
+  --hero-tint: linear-gradient(180deg, rgba(225, 29, 72, 0.1) 0%, rgba(225, 29, 72, 0.05) 100%);
+
+  --input-bg: #ffffff;
+  --input-bg-focus: #ffffff;
+  --input-border: #f0dde2;
+  --input-border-hover: rgba(225, 29, 72, 0.4);
+  --input-focus-ring: rgba(225, 29, 72, 0.15);
+  --input-placeholder: #2c2427;
+  --input-one-placeholder: #a88498;
+  --control-border: #c9a6b2;
 }
 
 /* ---------- 暗夜黑金（暗色） ---------- */
@@ -447,34 +346,28 @@
   --primary-glow-strong: rgba(212, 164, 64, 0.3);
   --primary-border: rgba(212, 164, 64, 0.18);
   --primary-border-strong: rgba(212, 164, 64, 0.4);
+  --primary-surface: rgba(212, 164, 64, 0.1);
+  --primary-surface-strong: rgba(212, 164, 64, 0.15);
+  --primary-surface-border: rgba(212, 164, 64, 0.24);
+  --primary-surface-text: #e2c784;
   --icon-invert: 0;
   --icon-filter: brightness(0) invert(1);
-
-  --gradient-primary: linear-gradient(135deg, #f0c453 0%, #d4a440 100%);
-  --gradient-brand: linear-gradient(135deg, var(--primary) 0%, var(--primary-deep) 100%);
-  --gradient-accent: linear-gradient(135deg, #f0c453 0%, #d4a440 45%, #b9892f 100%);
 
   --bg-page: #0b0d12;
   --bg-app: #0b0d12;
   --bg-card: #151922;
   --bg-elevated: #1a1f2b;
-  --bg-topbar: rgba(13, 16, 23, 0.78);
+  --bg-topbar: rgba(13, 16, 23, 0.82);
   --bg-panel: linear-gradient(180deg, rgba(21, 25, 34, 0.98), rgba(17, 20, 28, 0.96));
   --bg-toolbar: linear-gradient(180deg, rgba(21, 25, 34, 0.9), rgba(16, 19, 26, 0.9));
   --bg-thead: linear-gradient(180deg, #1c2130 0%, #181d29 100%);
   --bg-hover: rgba(212, 164, 64, 0.07);
+  --bg-hover-solid: #222324;
   --bg-stripe: rgba(255, 255, 255, 0.02);
   --bg-table-body: rgba(255, 255, 255, 0.02);
   --thead-color: #1a1f2b;
   --row-hover: linear-gradient(90deg, rgba(212, 164, 64, 0.08), rgba(226, 185, 94, 0.04));
-  --panel-glass: rgba(26, 31, 43, 0.88);
-
-  --app-bg: radial-gradient(1100px 520px at 88% -12%, rgba(212, 164, 64, 0.07), transparent 60%),
-    radial-gradient(900px 460px at -12% 108%, rgba(56, 189, 248, 0.04), transparent 55%),
-    var(--bg-page);
-  --login-orb-1: rgba(212, 164, 64, 0.4);
-  --login-orb-2: rgba(122, 89, 255, 0.3);
-  --login-orb-3: rgba(56, 189, 248, 0.22);
+  --panel-glass: rgba(26, 31, 43, 0.92);
 
   --sidebar-bg-1: #0e1117;
   --sidebar-bg-2: #12151d;
@@ -488,36 +381,292 @@
   --text-sidebar: #e8e6df;
   --text-submenu: #9aa3b5;
 
-  --status-success: #4ade80;
-  --status-success-bg: rgba(34, 197, 94, 0.16);
-  --status-warning: #fbbf24;
-  --status-warning-bg: rgba(245, 158, 11, 0.18);
-  --status-danger: #f87171;
-  --status-danger-bg: rgba(239, 68, 68, 0.16);
-  --status-info: #60a5fa;
-  --status-info-bg: rgba(59, 130, 246, 0.18);
-  --status-muted: #9aa3b5;
-  --status-muted-bg: rgba(154, 163, 181, 0.14);
-
   --border: #262c3a;
   --border-soft: rgba(255, 255, 255, 0.08);
   --border-faint: rgba(255, 255, 255, 0.05);
   --border-strong: rgba(255, 255, 255, 0.12);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.35);
-  --shadow: 0 4px 14px -2px rgba(0, 0, 0, 0.4), 0 2px 6px -2px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 24px 56px -16px rgba(0, 0, 0, 0.6), 0 8px 24px -8px rgba(0, 0, 0, 0.4);
-  --panel-shadow: 0 14px 34px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 18px 32px rgba(0, 0, 0, 0.5);
+  --panel-shadow: 0 12px 28px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.03);
   --app-frame-border: rgba(212, 164, 64, 0.22);
 
   --scrollbar-thumb: rgba(255, 255, 255, 0.16);
-  --text-selection: rgba(212, 164, 64, 0.2);
 
   --login-g1: #221c0e;
   --login-g2: #0d0a04;
   --login-tint: linear-gradient(135deg, rgba(212, 164, 64, 0.22) 0%, rgba(11, 13, 18, 0.55) 100%);
   --hero-tint: linear-gradient(180deg, rgba(11, 13, 18, 0.22) 0%, rgba(21, 25, 34, 0.42) 100%);
+
+  /* 表单控件暗色适配：边框提亮、底色略高于卡片、焦点金色光晕 */
+  --input-bg: #1a1f2b;
+  --input-bg-focus: rgba(212, 164, 64, 0.05);
+  --input-border: rgba(255, 255, 255, 0.28);
+  --input-border-hover: rgba(212, 164, 64, 0.5);
+  --input-focus-ring: rgba(212, 164, 64, 0.2);
+  --input-placeholder: #b3bdcf;
+  --input-one-placeholder: #c0c0c0;
+  --control-border: rgba(255, 255, 255, 0.42);
+  --warning-text: #e3b341;
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-content) :is(.type-btn.active, .profit-type-btn.active),
+[data-theme='nightgold'] .modal-box:has(.player-modal-content) .type-btn.active,
+[data-theme='nightgold'] .quick-chip.active:not(:disabled),
+[data-theme='nightgold'] .scope-btn.active:not(:disabled) {
+  background: var(--primary-surface);
+  border-color: var(--primary-surface-border);
+  color: var(--primary-surface-text);
+  box-shadow: none;
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-content) :is(.asset-balance-row, .profit-platform-row),
+[data-theme='nightgold'] .modal-box:has(.player-modal-content) .asset-balance-row {
+  border: 1px solid var(--primary-surface-border);
+  background: linear-gradient(135deg, var(--primary-surface-strong), var(--primary-surface));
+  color: var(--text-main);
+  box-shadow: none;
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-content) :is(.asset-balance-row, .profit-platform-row) span,
+[data-theme='nightgold'] .modal-box:has(.player-modal-content) .asset-balance-row span {
+  color: var(--text-sub);
+  opacity: 1;
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-content) :is(.asset-balance-row, .profit-platform-row) strong,
+[data-theme='nightgold'] .modal-box:has(.player-modal-content) .asset-balance-row strong {
+  color: var(--primary-surface-text);
+}
+
+[data-theme='nightgold'] .modal-box:has(.player-modal-content) .modal-header {
+  background: linear-gradient(180deg, #1b202a, #171b23);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+[data-theme='nightgold'] .modal-box:has(.player-modal-content) .modal-header strong {
+  color: var(--text-main);
+}
+
+[data-theme='nightgold'] .modal-box:has(.player-modal-content) .modal-title-dot {
+  background: var(--primary);
+  box-shadow: 0 0 0 4px rgba(212, 164, 64, 0.14);
+}
+
+[data-theme='nightgold'] .modal-box:has(.game-modal-content) .modal-header,
+[data-theme='nightgold'] .modal-box:has(.sku-modal-content) .modal-header,
+[data-theme='nightgold'] .modal-box:has(.channel-modal-content) .modal-header {
+  background: linear-gradient(180deg, #1b202a, #171b23);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+[data-theme='nightgold'] .modal-box:has(.game-modal-content) .modal-header strong,
+[data-theme='nightgold'] .modal-box:has(.sku-modal-content) .modal-header strong,
+[data-theme='nightgold'] .modal-box:has(.channel-modal-content) .modal-header strong {
+  color: var(--text-main);
+}
+
+[data-theme='nightgold'] .modal-box:has(.game-modal-content) .modal-title-dot,
+[data-theme='nightgold'] .modal-box:has(.sku-modal-content) .modal-title-dot,
+[data-theme='nightgold'] .modal-box:has(.channel-modal-content) .modal-title-dot {
+  background: var(--primary);
+  box-shadow: 0 0 0 4px rgba(212, 164, 64, 0.14);
+}
+
+[data-theme='nightgold'] .modal-box:has(.create-form) .form-section {
+  border-color: var(--border-soft);
+  background: linear-gradient(180deg, var(--bg-elevated), var(--bg-card));
+}
+
+[data-theme='nightgold'] .modal-box:has(.create-form) .form-section:focus-within {
+  border-color: var(--primary-border-strong);
+  box-shadow: 0 0 0 3px var(--primary-ring);
+}
+
+[data-theme='nightgold'] .modal-box:has(.create-form) .section-head h4 {
+  color: var(--text-main);
+}
+
+[data-theme='nightgold'] .modal-box:has(.create-form) .quick-chip:not(.active) {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text-sub);
+}
+
+[data-theme='nightgold'] .modal-box:has(.create-form) .quick-chip:not(.active):hover {
+  border-color: var(--primary-border-strong);
+  background: var(--primary-surface);
+  color: var(--primary-surface-text);
+}
+
+[data-theme='nightgold'] .modal-box:has(.logs-panel) .logs-panel {
+  border-color: var(--border-soft);
+  background: var(--bg-card);
+}
+
+[data-theme='nightgold'] .modal-box:has(.logs-panel) .logs-table thead th {
+  border-bottom: 1px solid var(--border-soft);
+  background: linear-gradient(180deg, #1d222e, #191e29);
+  color: var(--text-main);
+}
+
+[data-theme='nightgold'] .modal-box:has(.logs-panel) .logs-table tbody tr {
+  border-bottom-color: var(--border-soft);
+  background: var(--bg-card);
+}
+
+[data-theme='nightgold'] .modal-box:has(.logs-panel) .logs-table tbody tr:hover {
+  background: var(--bg-elevated);
+}
+
+[data-theme='nightgold'] .modal-box:has(.logs-panel) .log-user {
+  color: var(--text-main);
+}
+
+[data-theme='nightgold'] .modal-box:has(.logs-panel) .log-avatar {
+  background: var(--primary-surface);
+  color: var(--primary-surface-text);
+}
+
+[data-theme='nightgold'] .modal-box:has(.logs-panel) .logs-status.is-done {
+  color: #8bd8b5;
+  background: rgba(15, 159, 110, 0.16);
+}
+
+[data-theme='nightgold'] .modal-box:has(.logs-panel) .logs-status.is-undone {
+  color: var(--text-sub);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+[data-theme='nightgold'] .modal-box:has(.logs-panel) :is(.log-time, .logs-empty) {
+  color: var(--text-sub);
+}
+
+[data-theme='nightgold'] .modal-box:has(.player-modal-content) .asset-type-switch {
+  border-color: var(--border-soft);
+  background: var(--bg-elevated);
+}
+
+[data-theme='nightgold'] .modal-box:has(.player-modal-content) .type-btn:not(.active) {
+  color: var(--text-sub);
+}
+
+[data-theme='nightgold'] .modal-box:has(.player-modal-content) .upload-box {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: linear-gradient(180deg, #1a1f2b, #171b24);
+}
+
+[data-theme='nightgold'] .modal-box:has(.player-modal-content) .upload-box:hover:not(.is-dragging) {
+  border-color: var(--primary-border-strong);
+  background: rgba(212, 164, 64, 0.06);
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-body) .license-square-btn,
+[data-theme='nightgold'] .modal-box:has(.club-modal-body) .icon-btn {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text-sub);
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-body) .license-square-btn:hover,
+[data-theme='nightgold'] .modal-box:has(.club-modal-body) .icon-btn:hover {
+  border-color: var(--primary-border-strong);
+  background: var(--primary-surface);
+  color: var(--primary-surface-text);
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-body) .file-drop {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: linear-gradient(180deg, #1a1f2b, #171b24);
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-body) .file-drop.is-dragging {
+  border-color: var(--primary-border-strong);
+  background: var(--primary-surface);
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-body) .upload-btn-outline {
+  border-color: var(--primary-border-strong);
+  background: var(--primary-surface);
+  color: var(--primary-surface-text);
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-body) .upload-btn-outline:hover {
+  background: var(--primary-surface-strong);
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-body) .file-chip {
+  border-color: var(--border-soft);
+  background: var(--bg-elevated);
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-body) .chip-file-icon {
+  background: var(--primary-surface);
+  color: var(--primary-surface-text);
+}
+
+[data-theme='nightgold'] .modal-box:has(.club-modal-body) .chip-name,
+[data-theme='nightgold'] .modal-box:has(.club-modal-body) .chip-download {
+  color: var(--text-sub);
+}
+
+/* ---------- 暗夜黑金：原生表单控件统一暗黑适配（公共层） ----------
+   覆盖各页面写死的浅色 input/textarea/select/label，让所有页面的
+   自定义表单在暗色主题下自动跟随令牌；亮色主题不受影响。
+   排除：EP 组件内部控件（el-input__inner / el-textarea__inner / el-select__input，
+   由 element-ui.css 单独处理）、勾选框/单选/文件选择与隐藏输入。 */
+[data-theme='nightgold']
+  :is(
+    input:not([type='checkbox']):not([type='radio']):not([type='file']):not([hidden]):not(.el-input__inner):not(.el-select__input):not(.el-range-input),
+    textarea:not(.el-textarea__inner),
+    select:not([class*='el-'])
+  ) {
+  background: var(--input-bg) !important;
+  border: 1px solid var(--input-border) !important;
+  color: var(--text-main) !important;
+  caret-color: var(--primary);
+}
+
+[data-theme='nightgold'] select:not([class*='el-']) {
+  color-scheme: dark;
+}
+
+[data-theme='nightgold'] select:not([class*='el-']) option {
+  background-color: var(--bg-elevated);
+  color: var(--text-main);
+}
+
+[data-theme='nightgold']
+  :is(
+    input:not([type='checkbox']):not([type='radio']):not([type='file']):not([hidden]):not(.el-input__inner):not(.el-select__input):not(.el-range-input),
+    textarea:not(.el-textarea__inner)
+  )::placeholder {
+  color: var(--input-placeholder) !important;
+}
+
+[data-theme='nightgold']
+  :is(
+    input:not([type='checkbox']):not([type='radio']):not([type='file']):not([hidden]):not(.el-input__inner):not(.el-select__input):not(.el-range-input),
+    textarea:not(.el-textarea__inner),
+    select:not([class*='el-'])
+  ):focus {
+  outline: none !important;
+  border-color: var(--primary) !important;
+  background: var(--input-bg-focus) !important;
+  box-shadow: 0 0 0 3px var(--input-focus-ring) !important;
+}
+
+/* 表单标签统一为次级文字色（排除按钮型 label 如上传按钮） */
+[data-theme='nightgold'] .form-row label:not(.upload-btn),
+[data-theme='nightgold'] .field-row label,
+[data-theme='nightgold'] .field-label,
+[data-theme='nightgold'] .form-label,
+[data-theme='nightgold'] .search-label,
+[data-theme='nightgold'] .status-label,
+[data-theme='nightgold'] .mode-label,
+[data-theme='nightgold'] .ratio-label,
+[data-theme='nightgold'] .spec-section > label {
+  color: var(--text-sub) !important;
 }
 
 /* ---------- 主题切换过渡动画（切换瞬间临时加类） ---------- */
@@ -536,13 +685,9 @@ html.theme-switching *::after {
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: 8px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--primary);
-  border: 2px solid transparent;
-  background-clip: padding-box;
 }
 ::-webkit-scrollbar-track {
   background: var(--scrollbar-track);

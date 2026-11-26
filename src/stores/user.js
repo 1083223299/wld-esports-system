@@ -17,27 +17,9 @@ export const useUserStore = defineStore('user', {
     setUser(user) {
       this.user = user || {};
     },
-    /**
-     * 写入登录会话，兼容两种入参：
-     * - 后端登录结果（扁平）：{ token, client, role, name, accountId, clubId }
-     * - 旧 mock 形状：{ token, user }
-     */
-    setSession(session = {}) {
-      const { token, user } = session;
-      if (user) {
-        this.setToken(token);
-        this.setUser(user);
-        return;
-      }
+    setSession({ token, user }) {
       this.setToken(token);
-      this.setUser({
-        id: session.accountId,
-        accountId: session.accountId,
-        clubId: session.clubId,
-        client: session.client,
-        role: session.role,
-        name: session.name,
-      });
+      this.setUser(user);
     },
     reset() {
       this.token = '';

@@ -1,0 +1,15 @@
+{
+  // 工作区排除：减少 VSCode 对构建产物与依赖目录的索引/文件监视，避免长期持有 app.asar 句柄
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/release/**": true,
+    "**/staging-release/**": true
+  },
+  "search.exclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/release/**": true,
+    "**/staging-release/**": true
+  }
+}

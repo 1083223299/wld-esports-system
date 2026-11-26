@@ -5,6 +5,7 @@ import { authApi } from '../api/modules/auth';
 import { useUserStore } from '../stores/user';
 import { useToast } from '../composables/useToast';
 import logo from '../assets/images/logo.png';
+import { CircleClose } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -19,26 +20,56 @@ const rememberMe = ref(false);
 const form = reactive({
   username: '',
   password: '',
+  wecomId: '',
 });
+
+/** 企微 ID 下拉选项（GET /api/admin/auth/wecom-options） */
+const wecomOptions = ref([]);
+
+/** 下拉组件实例引用，用于清空 Element 内部的搜索关键字 */
+const wecomSelectRef = ref(null);
+
+/** 清空已选企微ID 与组件内部搜索词 */
+function clearWecom() {
+  form.wecomId = '';
+  const inst = wecomSelectRef.value;
+  // 清空组件内部输入词，恢复展示全部选项
+  if (inst?.states) inst.states.inputValue = '';
+}
 
 const rules = {
   username: [{ required: true, message: '账号不能为空', trigger: 'change' }],
   password: [{ required: true, message: '密码不能为空', trigger: 'change' }],
 };
 
+/** 拉取企微下拉选项（失败提示由 request.js 统一处理，下拉留空不影响登录） */
+async function loadWecomOptions() {
+  try {
+    wecomOptions.value = (await authApi.getWecomOptions()) || [];
+  } catch {
+    wecomOptions.value = [];
+  }
+}
+
 onMounted(() => {
+  loadWecomOptions();
+
   const saved = localStorage.getItem('loginRemember');
   if (!saved) return;
 
   try {
     const parsed = JSON.parse(saved);
-    form.username = parsed.username || '';
-    form.password = parsed.password || '';
+    form.username = String(parsed.username || '').trim();
+    form.password = String(parsed.password || '').trim();
     rememberMe.value = !!parsed.rememberMe;
   } catch {
     localStorage.removeItem('loginRemember');
   }
 });
+
+function trimLoginField(field) {
+  form[field] = form[field].trim();
+}
 
 function showPwd() {
   passwordType.value = passwordType.value === 'password' ? '' : 'password';
@@ -48,7 +79,11 @@ function saveRememberState() {
   if (rememberMe.value) {
     localStorage.setItem(
       'loginRemember',
-      JSON.stringify({ username: form.username, password: form.password, rememberMe: true })
+      JSON.stringify({
+        username: form.username.trim(),
+        password: form.password.trim(),
+        rememberMe: true,
+      })
     );
   } else {
     localStorage.removeItem('loginRemember');
@@ -57,6 +92,8 @@ function saveRememberState() {
 
 async function submit() {
   if (!loginFormRef.value) return;
+  form.username = form.username.trim();
+  form.password = form.password.trim();
   const valid = await loginFormRef.value.validate().catch(() => false);
   if (!valid) return;
 
@@ -64,16 +101,25 @@ async function submit() {
 
   try {
     saveRememberState();
-    const result = await authApi.login(form);
+    const result = await authApi.login({
+      username: form.username,
+      password: form.password,
+      wecomId: form.wecomId || '',
+    });
     userStore.setSession(result);
     show('登录成功', 'success');
-    // 通知通道在登录失效（401）时已停止轮询/关闭 ws；登录成功后触发重新初始化
-    window.dispatchEvent(new CustomEvent('auth:restored'));
+
+    // 用 me 接口拉取权威用户信息（含 wecomName 等），失败不阻塞登录
+    authApi
+      .me()
+      .then((user) => userStore.setUser(user))
+      .catch(() => {});
 
     const redirect = route.query.redirect || '/home';
     router.replace(String(redirect));
   } catch (error) {
-    // 错误提示由 request.js 统一 toast（直接展示后端返回的 message，如"账号或密码错误"）
+    // 错误提示已由 request.js 统一 toast，这里避免重复弹窗
+    console.error('[login]', error);
   } finally {
     loading.value = false;
   }
@@ -90,7 +136,7 @@ async function submit() {
       <div class="login-card">
         <div class="logo">
           <img :src="logo" alt="logo" />
-          <span class="system-name">俱乐部后台管理</span>
+          <span class="system-name">未来洞电竞管理后台</span>
         </div>
 
         <h2 class="title">欢迎使用</h2>
@@ -103,6 +149,8 @@ async function submit() {
               name="username"
               type="text"
               size="large"
+              clearable
+              @blur="trimLoginField('username')"
             />
           </el-form-item>
 
@@ -113,10 +161,39 @@ async function submit() {
               placeholder="请输入密码"
               name="password"
               size="large"
+              clearable
+              @blur="trimLoginField('password')"
               @keyup.enter="submit"
-            />
-            <span class="show-pwd" @click="showPwd">
-              <SvgIcon :icon-class="passwordType === 'password' ? 'eye' : 'eye-open'" />
+            >
+              <!-- 密码可见切换图标，放入 suffix 插槽与清空 × 并排 -->
+              <template #suffix>
+                <span class="show-pwd" @click="showPwd">
+                  <SvgIcon :icon-class="passwordType === 'password' ? 'eye' : 'eye-open'" />
+                </span>
+              </template>
+            </el-input>
+          </el-form-item>
+
+          <el-form-item>
+            <el-select
+              ref="wecomSelectRef"
+              v-model="form.wecomId"
+              placeholder="请选择企微ID（可选）"
+              filterable
+              filter-placeholder="输入角色或姓名搜索"
+              size="large"
+              class="wecom-select"
+            >
+              <el-option
+                v-for="opt in wecomOptions"
+                :key="opt.wecomId"
+                :label="opt.label || opt.name"
+                :value="opt.wecomId"
+              />
+            </el-select>
+            <!-- 自定义清空 ×：有选中值时显示，点击清空已选企微ID -->
+            <span v-if="form.wecomId" class="wecom-clear" @click="clearWecom">
+              <el-icon><CircleClose /></el-icon>
             </span>
           </el-form-item>
 
@@ -126,7 +203,7 @@ async function submit() {
               class="login-btn"
               size="large"
               :loading="loading"
-              :disabled="!(form.username && form.password)"
+              :disabled="!(form.username.trim() && form.password.trim())"
               @click="submit"
             >
               登录
@@ -221,6 +298,28 @@ async function submit() {
   margin-bottom: 20px;
 }
 
+.wecom-select {
+  width: 100%;
+}
+
+/* 下拉框自定义清空 ×：浮在右侧箭头左边 */
+.wecom-clear {
+  position: absolute;
+  right: 34px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  font-size: 15px;
+  color: var(--text-sub, #889aa4);
+  cursor: pointer;
+  z-index: 2;
+}
+
+.wecom-clear:hover {
+  color: var(--primary-hover, #e540cc);
+}
+
 .login-btn {
   width: 100%;
   height: 40px;
@@ -235,15 +334,13 @@ async function submit() {
 }
 
 .show-pwd {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
   font-size: 14px;
   color: #889aa4;
   cursor: pointer;
   user-select: none;
-  display: inline-flex;
 }
 
 @media (max-width: 880px) {

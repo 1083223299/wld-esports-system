@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 import { getToken } from '../utils/auth';
+import { useUserStore } from '../stores/user';
 import Layout from '../layout/index.vue';
 
 /**
@@ -8,8 +9,12 @@ import Layout from '../layout/index.vue';
  * - alwaysShow: true 始终显示父级菜单（有子菜单时）
  * - meta.title      侧边栏/面包屑名称
  * - meta.icon       侧边栏图标
+ * - meta.roles      可见角色（admin=管理员 / service=客服 / audit=审核员 / finance=财务）；
+ *                   不配置 roles 视为所有角色可见；侧边栏与路由守卫均按此过滤
  * 侧边栏由 Sidebar 直接遍历该树生成，顺序 = 数组顺序（无需后端接口）
  */
+const ALL_ROLES = ['admin', 'service', 'audit', 'finance'];
+const ADMIN_SERVICE_ROLES = ['admin', 'service'];
 const routes = [
   {
     path: '/login',
@@ -27,97 +32,241 @@ const routes = [
         path: 'home',
         name: 'Home',
         component: () => import('../views/HomeView.vue'),
-        meta: { title: '首页', icon: 'layout_icon1' },
+        meta: { title: '首页', icon: 'layout_icon1', roles: ALL_ROLES },
+      },
+      {
+        path: 'personal-center',
+        name: 'PersonalCenter',
+        redirect: '/personal-center/workbench',
+        alwaysShow: true,
+        meta: { title: '个人中心', icon: 'layout_icon8', roles: ADMIN_SERVICE_ROLES },
+        children: [
+          {
+            path: 'workbench',
+            name: 'PersonalCenterWorkbench',
+            component: () => import('../views/personalCenter/PersonalCenterView/pages/Workbench.vue'),
+            meta: { title: '工作台' },
+          },
+          {
+            path: 'rest',
+            name: 'PersonalCenterRest',
+            component: () => import('../views/personalCenter/PersonalCenterView/pages/Rest.vue'),
+            meta: { title: '休班申请' },
+          },
+          {
+            path: 'leave',
+            name: 'PersonalCenterLeave',
+            component: () => import('../views/personalCenter/PersonalCenterView/pages/Leave.vue'),
+            meta: { title: '请假申请' },
+          },
+          {
+            path: 'seating',
+            name: 'PersonalCenterSeating',
+            component: () => import('../views/personalCenter/PersonalCenterView/pages/Seating.vue'),
+            meta: { title: '座次安排' },
+          },
+          {
+            path: 'content',
+            name: 'PersonalCenterContent',
+            component: () => import('../views/personalCenter/PersonalCenterView/pages/Content.vue'),
+            meta: { title: '公告与社区' },
+          },
+          {
+            path: 'files',
+            name: 'PersonalCenterFiles',
+            component: () => import('../views/personalCenter/PersonalCenterView/pages/Files.vue'),
+            meta: { title: '文件中心' },
+          },
+          {
+            path: 'assessment',
+            name: 'PersonalCenterAssessment',
+            component: () => import('../views/personalCenter/PersonalCenterView/pages/Assessment.vue'),
+            meta: { title: '我的考核' },
+          },
+          {
+            path: 'dashboard',
+            name: 'PersonalCenterDashboard',
+            component: () => import('../views/personalCenter/PersonalCenterView/pages/Dashboard.vue'),
+            meta: { title: '电竞看板' },
+          },
+          {
+            path: 'manage',
+            name: 'PersonalCenterManage',
+            component: () => import('../views/personalCenter/PersonalCenterView/pages/Manage.vue'),
+            meta: { title: '管理工作区' },
+          },
+        ],
       },
       {
         path: 'notify',
         name: 'SystemNotify',
         component: () => import('../views/handoverCenter/SystemNotifyView/index.vue'),
-        hidden: true, // 独立入口：侧边栏不展示，仅通过右上角铃铛进入
-        meta: { title: '系统通知' },
+        hidden: true, // 独立入口：侧边栏不展示，仅通过右上角铃铛进入（不影响工作协作菜单展开/收起）
+        meta: { title: '系统通知', roles: ALL_ROLES },
       },
       {
         path: 'users',
         name: 'Users',
         redirect: '/users/player-list',
         alwaysShow: true,
-        meta: { title: '打手管理', icon: 'layout_icon11' },
+        meta: { title: '用户管理', icon: 'layout_icon11', roles: ['admin', 'service', 'audit'] },
         children: [
           {
             path: 'player-list',
             name: 'PlayerList',
             component: () => import('../views/userManagement/PlayerListView/index.vue'),
-            meta: { title: '打手列表' },
+            meta: { title: '打手列表', roles: ['admin', 'service', 'audit'] },
+          },
+          {
+            // 打手入驻审核：原型中为打手列表内的 tab，按要求拆分为用户管理下的独立菜单（不与打手列表合并）
+            path: 'player-audit',
+            name: 'PlayerAudit',
+            component: () => import('../views/userManagement/PlayerAuditListView/index.vue'),
+            meta: { title: '打手审核', roles: ['admin', 'audit'] },
+          },
+          {
+            path: 'club-list',
+            name: 'ClubList',
+            component: () => import('../views/userManagement/ClubListView/index.vue'),
+            meta: { title: '俱乐部列表', roles: ['admin', 'service', 'audit'] },
           },
         ],
       },
       {
         path: 'orders',
         name: 'Orders',
-        redirect: '/orders/my-orders',
+        redirect: '/orders/reminder',
         alwaysShow: true,
-        meta: { title: '订单管理', icon: 'layout_icon4' },
+        meta: { title: '订单管理', icon: 'layout_icon4', roles: ALL_ROLES },
         children: [
           {
-            path: 'my-orders',
-            name: 'MyOrders',
-            component: () => import('../views/orderManagement/MyOrdersView/index.vue'),
-            meta: { title: '我的订单' },
+            path: 'reminder',
+            name: 'OrderReminder',
+            component: () => import('../views/orderManagement/OrderManageView/ReminderListTab.vue'),
+            meta: { title: '催单列表', roles: ALL_ROLES },
           },
           {
-            path: 'order-detail/:orderId',
-            name: 'OrderDetail',
-            component: () => import('../views/orderManagement/OrderDetailView/index.vue'),
-            hidden: true, // 通知跳转目标，不进侧边栏
-            meta: { title: '订单详情' },
+            path: 'claim',
+            name: 'OrderClaimHall',
+            hidden: true,
+            redirect: (to) => ({
+              path: '/orders/list',
+              query: { ...to.query, status: 'WAIT_CLAIM' },
+              hash: to.hash,
+            }),
           },
           {
-            path: 'hall',
-            name: 'ClaimHall',
-            component: () => import('../views/orderManagement/ClaimHallView/index.vue'),
-            meta: { title: '抢单大厅' },
+            path: 'list',
+            name: 'OrderList',
+            component: () => import('../views/orderManagement/OrderManageView/OrderListTab.vue'),
+            meta: { title: '订单列表', roles: ALL_ROLES },
           },
           {
-            path: 'dispatch',
-            name: 'DispatchMessage',
-            component: () => import('../views/orderManagement/DispatchMessageView/index.vue'),
-            meta: { title: '派单消息' },
+            path: 'approvals',
+            name: 'OrderApprovals',
+            component: () => import('../views/orderManagement/OrderApprovalView/index.vue'),
+            meta: { title: '订单相关审批', roles: ['admin'] },
+          },
+          {
+            path: 'manage',
+            name: 'OrderManage',
+            hidden: true,
+            redirect: (to) => {
+              const { tab, ...query } = to.query;
+              const paths = { reminder: '/orders/reminder', claim: '/orders/list', order: '/orders/list' };
+              return {
+                path: paths[tab] || '/orders/reminder',
+                query: tab === 'claim' ? { ...query, status: 'WAIT_CLAIM' } : query,
+                hash: to.hash,
+              };
+            },
           },
         ],
       },
       {
         path: 'finance',
         name: 'Finance',
-        redirect: '/finance/my-deposit',
+        redirect: '/finance/wallet-detail',
         alwaysShow: true,
-        meta: { title: '财务管理', icon: 'layout_icon6' },
+        meta: { title: '财务管理', icon: 'layout_icon6', roles: ['admin', 'finance'] },
         children: [
           {
-            path: 'my-deposit',
-            name: 'MyDeposit',
-            component: () => import('../views/financialManagement/MyDepositView/index.vue'),
-            meta: { title: '我的押金' },
+            path: 'wallet-detail',
+            name: 'WalletDetail',
+            component: () => import('../views/financialManagement/WalletDetailView/index.vue'),
+            meta: { title: '钱包明细', roles: ['admin', 'finance'] },
           },
           {
-            path: 'my-wallet',
-            name: 'MyWallet',
-            component: () => import('../views/financialManagement/MyWalletView/index.vue'),
-            meta: { title: '我的钱包' },
+            path: 'withdrawal-detail',
+            name: 'WithdrawalDetail',
+            component: () => import('../views/financialManagement/WithdrawalDetailView/index.vue'),
+            meta: { title: '提现明细', roles: ['admin', 'finance'] },
+          },
+          {
+            path: 'order-channel-stats',
+            name: 'OrderChannelStats',
+            component: () => import('../views/financialManagement/OrderChannelStatsView/index.vue'),
+            meta: { title: '渠道订单统计', roles: ['admin', 'finance'] },
+          },
+        ],
+      },
+      {
+        path: 'handover',
+        name: 'Handover',
+        redirect: '/handover/log',
+        alwaysShow: true,
+        meta: { title: '工作协作', icon: 'layout_icon5', roles: ['admin', 'service'] },
+        children: [
+          {
+            path: 'log',
+            name: 'HandoverLog',
+            component: () => import('../views/handoverCenter/HandoverLogView/index.vue'),
+            meta: { title: '交接日志', roles: ['admin', 'service'] },
           },
         ],
       },
       {
         path: 'configuration',
         name: 'Configuration',
-        redirect: '/configuration/index',
+        redirect: '/configuration/game-list',
         alwaysShow: true,
-        meta: { title: '配置管理', icon: 'layout_icon2' },
+        meta: { title: '配置管理', icon: 'layout_icon2', roles: ['admin'] },
         children: [
           {
-            path: 'index',
-            name: 'ClubConfig',
-            component: () => import('../views/configurationManagement/ClubConfigView/index.vue'),
-            meta: { title: '配置管理' },
+            path: 'game-list',
+            name: 'GameList',
+            component: () => import('../views/configurationManagement/GameListView/index.vue'),
+            meta: { title: '游戏货架', roles: ['admin'] },
+          },
+          {
+            path: 'shop-management',
+            name: 'ShopManagement',
+            component: () => import('../views/configurationManagement/ShopManagementView/index.vue'),
+            meta: { title: '店铺管理', roles: ['admin'] },
+          },
+          {
+            path: 'channel-list',
+            name: 'ChannelList',
+            component: () => import('../views/configurationManagement/ChannelListView/index.vue'),
+            meta: { title: '渠道配置', roles: ['admin'] },
+          },
+          {
+            path: 'order-config',
+            name: 'OrderConfig',
+            component: () => import('../views/configurationManagement/OrderConfigView/index.vue'),
+            meta: { title: '卡单时长配置', roles: ['admin'] },
+          },
+          {
+            path: 'profit-config',
+            name: 'ProfitConfig',
+            component: () => import('../views/configurationManagement/ProfitConfigView/index.vue'),
+            meta: { title: '分润配置', roles: ['admin'] },
+          },
+          {
+            path: 'spec-price',
+            name: 'SpecPriceConfig',
+            component: () => import('../views/configurationManagement/SpecPriceConfigView/index.vue'),
+            meta: { title: '自定义规格价格配置', roles: ['admin'] },
           },
         ],
       },
@@ -131,8 +280,16 @@ const routes = [
   },
   // 兼容旧地址
   {
+    path: '/user-list',
+    redirect: '/users/list',
+  },
+  {
     path: '/player-list',
     redirect: '/users/player-list',
+  },
+  {
+    path: '/club-list',
+    redirect: '/users/club-list',
   },
   {
     path: '/:pathMatch(.*)*',
@@ -163,11 +320,24 @@ router.beforeEach((to, from, next) => {
     return;
   }
 
+  // 角色权限校验：目标路由 meta.roles 不含当前角色时拦截回首页
+  const userRole = useUserStore().role || 'admin';
+  const matchedRoles = [...to.matched].reverse().find((record) => record.meta?.roles);
+  if (matchedRoles && !matchedRoles.meta.roles.includes(userRole)) {
+    next('/home');
+    return;
+  }
+
   next();
 });
 
 router.afterEach((to) => {
   document.title = to.meta.title ? `${to.meta.title} - 未来洞` : '未来洞';
+  // 通知主进程：当前是否停在系统通知页
+  // 在通知页时来新消息 → 不闪托盘（正在看不需要闪烁提醒），但声音和冒泡仍然保留
+  if (window.notifyBridge && window.notifyBridge.setPageStatus) {
+    window.notifyBridge.setPageStatus(to.path === '/notify');
+  }
 });
 
 export default router;

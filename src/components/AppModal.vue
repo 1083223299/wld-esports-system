@@ -1,28 +1,97 @@
 <script setup>
+import { ref, watch } from 'vue';
+import { useConfirm } from '../composables/useConfirm';
+
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   title: { type: String, default: '' },
   width: { type: String, default: '460px' },
+  height: { type: String, default: 'auto' },
+  zIndex: { type: Number, default: 100 },
+  closeOnClickOutside: { type: Boolean, default: true },
 });
 const emit = defineEmits(['update:modelValue']);
+const hasUnsavedInput = ref(false);
+const escapeConfirmationOpen = ref(false);
+const { confirm } = useConfirm();
+
+watch(
+  () => props.modelValue,
+  () => {
+    hasUnsavedInput.value = false;
+  }
+);
 
 function close() {
   emit('update:modelValue', false);
 }
+
+function handleOverlayClick() {
+  if (props.closeOnClickOutside) close();
+}
+
+function markDirtyOnClick(event) {
+  if (event.target instanceof Element && event.target.closest('[data-modal-dirty]')) {
+    hasUnsavedInput.value = true;
+  }
+}
+
+async function handleEscape() {
+  if (!props.modelValue) return;
+  if (!hasUnsavedInput.value) {
+    close();
+    return;
+  }
+  if (escapeConfirmationOpen.value) return;
+
+  escapeConfirmationOpen.value = true;
+  try {
+    const shouldClose = await confirm({
+      title: '未保存的修改',
+      message: '当前弹窗有尚未保存的修改，确定放弃并关闭吗？',
+      okText: '放弃修改',
+    });
+    if (shouldClose) close();
+  } finally {
+    escapeConfirmationOpen.value = false;
+  }
+}
+
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="modelValue" class="modal-overlay" @click.self="close">
-      <div class="modal-box" :style="{ width }">
+    <div
+      v-if="modelValue"
+      class="modal-overlay"
+      :style="{ zIndex }"
+      @click.self="handleOverlayClick"
+      @keydown.esc.stop.prevent="handleEscape"
+    >
+      <div class="modal-box" :style="{ width: `calc(${width} + 300px)`, height }">
         <div class="modal-header">
           <div class="modal-title-wrap">
             <span class="modal-title-dot"></span>
             <strong>{{ title }}</strong>
           </div>
-          <button class="btn btn-link" @click="close" aria-label="关闭">✕</button>
+          <button
+            type="button"
+            class="modal-close-btn"
+            @click="close"
+            aria-label="关闭弹窗"
+            title="关闭"
+          >
+            <svg aria-hidden="true" viewBox="0 0 16 16">
+              <path d="m4 4 8 8M12 4l-8 8" />
+            </svg>
+          </button>
         </div>
-        <div class="modal-body">
+        <div
+          class="modal-body"
+          @input.capture="hasUnsavedInput = true"
+          @change.capture="hasUnsavedInput = true"
+          @click.capture="markDirtyOnClick"
+        >
           <slot />
         </div>
         <div v-if="$slots.footer" class="modal-footer">
@@ -38,16 +107,15 @@ function close() {
   position: fixed;
   inset: 0;
   background: var(--el-mask-color, rgba(15, 23, 42, 0.52));
-  backdrop-filter: blur(4px);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
-  animation: fade-in 0.18s ease;
 }
 .modal-box {
   background: var(--bg-panel);
-  border-radius: 20px;
+  border-radius: 18px;
   max-width: 90vw;
   max-height: calc(100vh - 48px);
   display: flex;
@@ -55,25 +123,6 @@ function close() {
   border: 1px solid var(--border-soft);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
-  animation: modal-pop 0.22s var(--ease-out, ease);
-}
-@keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-@keyframes modal-pop {
-  from {
-    opacity: 0;
-    transform: translateY(12px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
 }
 .modal-header {
   display: flex;
@@ -82,8 +131,7 @@ function close() {
   flex-shrink: 0;
   padding: 18px 20px 16px;
   border-bottom: 1px solid var(--border-soft);
-  background: linear-gradient(180deg, var(--bg-elevated), var(--bg-toolbar));
-  position: relative;
+  background: var(--bg-toolbar);
 }
 .modal-title-wrap {
   display: inline-flex;
@@ -98,24 +146,47 @@ function close() {
   box-shadow: 0 0 0 4px var(--primary-ring);
 }
 .modal-header strong {
-  font-size: 16px;
+  font-size: 18px;
   color: var(--text-main);
-  letter-spacing: 0.02em;
 }
-.btn-link {
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
+.modal-close-btn {
+  display: inline-flex;
+  flex: 0 0 40px;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-card);
   color: var(--text-sub);
   cursor: pointer;
-  font-size: 18px;
-  transition: all 0.2s ease;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
 }
-.btn-link:hover {
-  background: var(--primary-soft);
-  color: var(--primary);
+
+.modal-close-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.8;
+}
+
+.modal-close-btn:hover {
+  border-color: rgba(217, 45, 32, 0.28);
+  background: rgba(217, 45, 32, 0.08);
+  color: var(--danger, #d92d20);
+}
+
+.modal-close-btn:active {
+  transform: scale(0.96);
+}
+
+.modal-close-btn:focus-visible {
+  outline: 3px solid var(--primary-ring);
+  outline-offset: 2px;
 }
 .modal-body {
   padding: 20px 20px 18px;

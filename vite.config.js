@@ -1,13 +1,11 @@
-import { defineConfig } from 'vite';
-import vue from '@vitejs/plugin-vue';
-import { readFileSync } from 'node:fs';
+const { defineConfig } = require('vite');
+const vue = require('@vitejs/plugin-vue');
+const pkg = require('./package.json');
 
-/** 读取 package.json 的 version，编译期注入 __APP_VERSION__（config/env.js 的 CLIENT_VERSION 用） */
-const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'));
-
-export default defineConfig({
+module.exports = defineConfig({
   plugins: [vue()],
   base: './',
+  // 编译期注入公共常量：版本号统一从 package.json 读取，env.js 里用 __APP_VERSION__ 引用
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
@@ -16,7 +14,7 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: 7070,
+    port: 8080,
     strictPort: false,
     host: '0.0.0.0',
   },

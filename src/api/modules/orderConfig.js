@@ -1,29 +1,22 @@
 import { request } from '../request';
 
-const { mock } = request;
-
 /**
- * 订单相关配置（卡单时长）
- * - pendingClaimMinutes   待领取时长（分钟）：订单进入大厅后多久未被领取算卡单
- * - pendingDispatchMinutes 待派单时长（分钟）：客服派单后多久未派出算卡单
- * - pendingAcceptMinutes  待接单时长（分钟）：派给打手后多久未接单算卡单
+ * 订单超时配置（GET /api/admin/timeouts 查询 / PUT /api/admin/timeouts 保存）
+ * 测试环境口径：
+ * - GET 按顺序返回 [{ name, code, minutes, ... }]，页面直接用返回的 name 动态渲染标签
+ * - PUT 提交 [{ name, code, minutes }]，不传 mode
  */
-const store = {
-  pendingClaimMinutes: 10,
-  pendingDispatchMinutes: 10,
-  pendingAcceptMinutes: 10,
-};
-
 export const orderConfigApi = {
-  /** 获取订单相关配置 */
-  get: () => mock({ ...store }, 200),
+  /** 获取超时配置（GET，保持后端返回顺序） */
+  get: () => request.get('/api/admin/timeouts'),
 
-  /** 保存订单相关配置 */
-  save: (data = {}) =>
-    mock(null, 300).then(() => {
-      store.pendingClaimMinutes = Number(data.pendingClaimMinutes);
-      store.pendingDispatchMinutes = Number(data.pendingDispatchMinutes);
-      store.pendingAcceptMinutes = Number(data.pendingAcceptMinutes);
-      return { ...store };
-    }),
+  /** 保存超时配置（PUT，请求体 [{ name, code, minutes }]） */
+  save: async (items = []) => {
+    const list = (items || []).map((it) => ({
+      name: it.name,
+      code: it.code,
+      minutes: Number(it.minutes),
+    }));
+    return request.put('/api/admin/timeouts', list);
+  },
 };

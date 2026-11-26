@@ -1,35 +1,114 @@
 {
-  "name": "futurecave-web-admin",
-  "version": "1.0.0",
-  "description": "俱乐部后台管理",
-  "private": true,
-  "type": "module",
+  "//": "Electron 桌面端主配置文件；JSON 不支持注释，本文件通过 '//': '说明' 字段实现注释（npm/electron-builder 会原样保留）",
+  "name": "my-electron-app",
+  "version": "1.0.37",
+  "description": "未来洞电竞一站式操作系统",
+  "main": "main.js",
   "scripts": {
-    "dev": "cross-env VITE_APP_ENV=local vite",
-    "dev:local": "cross-env VITE_APP_ENV=local vite",
-    "dev:dev": "cross-env VITE_APP_ENV=dev vite",
-    "dev:test": "cross-env VITE_APP_ENV=test vite",
-    "dev:staging": "cross-env VITE_APP_ENV=staging vite",
-    "dev:prod": "cross-env VITE_APP_ENV=prod vite",
+    "//": "命令说明：dev* 热更新开发启动（dev:local:prod-api 本地热更新并连接生产 API） | build* 构建产物 | start* 构建后运行 | pack* 仅打包目录 | dist* 打生成安装包（predist* 为发布前预检，npm 会自动先执行） | 末尾 collect-artifacts 负责把项目外构建目录里的产物回移到 release/",
+    "dev": "node scripts/dev.js",
+    "dev:local": "npm run dev:local:hot",
+    "dev:local:hot": "cross-env VITE_APP_ENV=local node scripts/dev.js",
+    "dev:local:prod-api": "cross-env VITE_APP_ENV=prod node scripts/dev.js",
+    "dev:test": "cross-env VITE_APP_ENV=test node scripts/dev.js",
     "build": "vite build",
-    "preview": "vite preview",
     "build:local": "cross-env VITE_APP_ENV=local vite build",
     "build:dev": "cross-env VITE_APP_ENV=dev vite build",
     "build:test": "cross-env VITE_APP_ENV=test vite build",
     "build:staging": "cross-env VITE_APP_ENV=staging vite build",
-    "build:prod": "cross-env VITE_APP_ENV=prod vite build"
+    "build:prod": "cross-env VITE_APP_ENV=prod vite build",
+    "start": "npm run build && electron .",
+    "start:local": "npm run build:local && electron .",
+    "start:dev": "npm run build:dev && electron .",
+    "start:test": "npm run build:test && electron .",
+    "start:staging": "npm run build:staging && electron .",
+    "start:prod": "npm run build:prod && electron .",
+    "pack": "npm run build && electron-builder --config electron-builder.config.js --dir && node scripts/collect-artifacts.js --with-unpacked",
+    "pack:local": "npm run build:local && cross-env VITE_APP_ENV=local electron-builder --config electron-builder.config.js --dir && node scripts/collect-artifacts.js --with-unpacked",
+    "pack:dev": "npm run build:dev && cross-env VITE_APP_ENV=dev electron-builder --config electron-builder.config.js --dir && node scripts/collect-artifacts.js --with-unpacked",
+    "pack:test": "npm run build:test && cross-env VITE_APP_ENV=test electron-builder --config electron-builder.config.js --dir && node scripts/collect-artifacts.js --with-unpacked",
+    "pack:staging": "npm run build:staging && cross-env VITE_APP_ENV=staging electron-builder --config electron-builder.config.js --dir && node scripts/collect-artifacts.js --with-unpacked",
+    "pack:prod": "npm run build:prod && cross-env VITE_APP_ENV=prod electron-builder --config electron-builder.config.js --dir && node scripts/collect-artifacts.js --with-unpacked",
+    "dist": "npm run build && electron-builder --config electron-builder.config.js && node scripts/collect-artifacts.js",
+    "predist": "node scripts/check-release-lock.js",
+    "dist:local": "npm run build:local && cross-env VITE_APP_ENV=local electron-builder --config electron-builder.config.js && node scripts/collect-artifacts.js",
+    "predist:local": "node scripts/check-release-lock.js",
+    "dist:dev": "npm run build:dev && cross-env VITE_APP_ENV=dev electron-builder --config electron-builder.config.js && node scripts/collect-artifacts.js",
+    "predist:dev": "node scripts/check-release-lock.js",
+    "dist:test": "npm run build:test && cross-env VITE_APP_ENV=test electron-builder --config electron-builder.config.js && node scripts/collect-artifacts.js",
+    "predist:test": "node scripts/check-release-lock.js",
+    "dist:staging": "npm run build:staging && cross-env VITE_APP_ENV=staging electron-builder --config electron-builder.config.js && node scripts/collect-artifacts.js",
+    "predist:staging": "node scripts/check-release-lock.js",
+    "dist:prod": "npm run build:prod && cross-env VITE_APP_ENV=prod electron-builder --config electron-builder.config.js && node scripts/collect-artifacts.js",
+    "predist:prod": "node scripts/check-release-lock.js",
+    "dist:mac": "npm run build:prod && cross-env VITE_APP_ENV=prod electron-builder --config electron-builder.config.js --mac && node scripts/collect-artifacts.js",
+    "predist:mac": "node scripts/check-release-lock.js"
   },
+  "author": "Jane Doe",
+  "license": "MIT",
+  "//devDependencies": "开发期依赖：electron 运行时、vite 构建、electron-builder 打包",
+  "devDependencies": {
+    "@electron-forge/publisher-github": "^7.11.2",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "cross-env": "^10.1.0",
+    "electron": "23.1.3",
+    "electron-builder": "^24.13.3",
+    "vite": "^8.3.4"
+  },
+  "//dependencies": "运行时依赖：Vue3 + Element Plus + Pinia 持久化 + 路由，electron-updater 自动更新、electron-log 日志",
   "dependencies": {
-    "dayjs": "^1.11.13",
+    "electron-log": "^5.4.4",
+    "electron-updater": "^6.8.9",
     "element-plus": "^2.14.7",
     "pinia": "^4.0.3",
     "pinia-plugin-persistedstate": "^4.7.1",
     "vue": "^3.5.43",
     "vue-router": "^4.5.1"
   },
-  "devDependencies": {
-    "@vitejs/plugin-vue": "^6.0.10",
-    "cross-env": "^10.1.0",
-    "vite": "^8.3.4"
+  "build": {
+    "appId": "com.myapp.desktop",
+    "productName": "未来洞电竞管理系统",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "preload.js",
+      "notifyBubblePreload.js",
+      "trayMenuPreload.js",
+      "src/assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png",
+      "signAndEditExecutable": true
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "未来洞电竞管理系统"
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://weilaidong.oss-cn-beijing.aliyuncs.com/esports-updata/"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.business",
+      "hardenedRuntime": true,
+      "notarize": false
+    }
   }
 }

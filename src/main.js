@@ -13,19 +13,30 @@ dayjs.locale('zh-cn');
 /* ================= 主题预加载 =================
  * 挂载前先读取本地记忆的主题并写入 <html data-theme>，
  * 避免启动瞬间闪烁默认主题。
- * 与 stores/theme.js 的持久化键保持一致。
- * 特殊：saved.name === 'system' 时根据系统亮暗偏好解析真实主题。
+ * 与 stores/theme.js 的持久化键保持一致；「跟随系统」时按系统明暗落位；
+ * 首次运行（无记忆）默认跟随系统。
  */
 try {
   const raw = localStorage.getItem('futurecave-theme');
-  let themeName = raw ? JSON.parse(raw)?.name : null;
-  if (!themeName) themeName = 'system'; // 默认跟随系统
-
-  if (themeName === 'system') {
-    const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    themeName = isDark ? 'nightgold' : 'aurora';
+  let saved = null;
+  if (raw) {
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.name) saved = parsed;
   }
-  document.documentElement.setAttribute('data-theme', themeName);
+  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  let themeId;
+  if (saved) {
+    if (saved.name === SYSTEM_THEME) {
+      const baseTheme = saved.base ? themes.find((t) => t.id === saved.base) : null;
+      themeId = dark ? 'nightgold' : baseTheme && baseTheme.mode === 'light' ? saved.base : 'aurora';
+    } else {
+      themeId = saved.name;
+    }
+  } else {
+    // 首次运行：默认跟随系统
+    themeId = dark ? 'nightgold' : 'aurora';
+  }
+  document.documentElement.setAttribute('data-theme', themeId);
 } catch {
   /* 本地数据损坏时忽略，走默认主题 */
 }
@@ -37,8 +48,11 @@ import './assets/styles/layout.css';
 import './assets/styles/list-page.css';
 import './assets/styles/element-ui.css';
 import './theme/theme.css';
+import { themes } from './theme/themes';
+import { SYSTEM_THEME } from './stores/theme';
 
 import SvgIcon from './components/SvgIcon/index.vue';
+import EnhancedImage from './components/EnhancedImage.vue';
 import { registerIcons } from './icons';
 
 registerIcons();
@@ -46,13 +60,26 @@ registerIcons();
 const pinia = createPinia();
 pinia.use(piniaPluginPersistedstate);
 
+document.addEventListener('click', (event) => {
+  if (!(event.target instanceof Element) || !event.target.closest('.el-image-viewer__canvas img')) return;
+  document.querySelector('.el-image-viewer__close')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+});
+
 // 初始化主题 Store（state 初始化时会自行从 localStorage 恢复记忆的主题）
 import { useThemeStore } from './stores/theme';
 useThemeStore(pinia).init();
+
+// 平台标记：mac 上给 <html> 打 is-mac，用于红绿灯留白、隐藏自绘窗口按钮等差异化样式（Windows 不命中任何规则）
+try {
+  if (window.appEnv && window.appEnv.isMac) document.documentElement.classList.add('is-mac');
+} catch {
+  /* 非 Electron 环境忽略 */
+}
 
 createApp(App)
   .component('SvgIcon', SvgIcon)
   .use(pinia)
   .use(router)
   .use(ElementPlus, { locale: zhCn })
+  .component('el-image', EnhancedImage)
   .mount('#app');

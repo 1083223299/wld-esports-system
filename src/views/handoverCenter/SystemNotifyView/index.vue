@@ -2,34 +2,57 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useNotifyStore } from '../../../stores/notify';
-import { TYPE_META } from '../../../api/notifySocket';
-import { resolveNotifyTarget } from '../../../utils/notifyJump';
+import { NOTIFY_TYPE } from '../../../api/notifySocket';
+import { notifyApi, normalizeNotification, normalizeNotificationPage } from '../../../api/modules/notification';
 import { useToast } from '../../../composables/useToast';
 
 /**
- * 系统通知（入口：右上角铃铛）
- * 数据源：GET /api/club/notifications（09-通知，后端真实接口，挂载时拉取）
- * - 顶部「仅看未读」开关（可选中 / 取消选中）+ 全部已读（逐个调用已读接口）
- * - 列表字段：类型标签（sceneLabel 优先）/ 标题 / 正文 / 相对时间（timeText 优先）/ 查看（点击=标记已读并跳转对应页面）
- * - 跳转规则（utils/notifyJump，2026-10-23 后端口径）：
- *   · jumpTarget=ORDER → 订单详情（详情页未建，暂跳订单列表并搜索 orderNo）
- *   · 本地 mock / 旧消息按类型：派单转单、订单交易关闭、卡单预警 → 订单列表并搜索（查不到报「订单不存在」）
- *   · 其余（抢单超时 / 钱包类）→ 图未标注跳转，仅标记已读
- * - 已读后 WebSocket 会推 type=UNREAD，铃铛角标（badge 字符串，超 99 为 99+）随之更新
+ * 工作协作 > 系统通知（入口：右上角铃铛）
+ * - 顶部「仅看未读」开关（可选中 / 取消选中）+ 全部已读
+ * - 列表字段：标题 / 正文 / 时间 / 查看（点击=标记已读并跳转对应页面）
+ * - 数据源：管理端接口 GET /api/admin/notifications（后端为权威列表）；
+ *   已读走 POST /api/admin/notifications/{id}/read（接口无批量端点，全部已读按未读列表逐条提交）；
+ *   接口不可用时（如本地 mock 环境无后端）回落到 store 实时通道列表，保证页面可用
  */
 const notify = useNotifyStore();
 const router = useRouter();
 const { show } = useToast();
 
 const onlyUnread = ref(false); // 仅看未读开关
-const loading = ref(false); // 列表加载中
+const items = ref([]); // 接口返回的通知列表（新在前）
+const loading = ref(false);
 
 const filtered = computed(() =>
-  onlyUnread.value ? notify.items.filter((i) => !i.read) : notify.items
+  onlyUnread.value ? items.value.filter((i) => !i.read) : items.value
 );
+const unreadCount = computed(() => items.value.filter((i) => !i.read).length);
 
-/* ================= 时间显示（相对时间，如“2分钟前”） ================= */
-function relativeTime(t) {
+/* ================= 列表加载（管理端接口，分页 + 后端未读角标） ================= */
+async function loadList() {
+  loading.value = true;
+  try {
+    const res = await notifyApi.list({ page: 1, pageSize: 50 });
+    const { list, unread, badge } = normalizeNotificationPage(res);
+    items.value = list
+      .map(normalizeNotification)
+      .sort((a, b) => String(b.time).localeCompare(String(a.time)));
+    await Promise.all(items.value.map((item) => notify.enrichOrderNotification(item)));
+    // 同步到 store：铃铛角标 / 托盘未读列表与后端保持一致（后端 badge 权威）
+    notify.items = items.value;
+    notify.applyBadge(unread, badge);
+    notify.syncTrayBadge();
+  } catch {
+    // 接口不可用（本地 mock 环境等）：回落到实时通道列表
+    items.value = notify.items.slice();
+  } finally {
+    loading.value = false;
+  }
+}
+
+/* ================= 时间显示（相对时间，后端 timeText 优先，如“2分钟前”） ================= */
+function relativeTime(item) {
+  if (item && item.timeText) return item.timeText;
+  const t = item ? item.time : '';
   if (!t) return '';
   const then = new Date(String(t).replace(/-/g, '/')).getTime();
   if (Number.isNaN(then)) return String(t);
@@ -44,44 +67,104 @@ function relativeTime(t) {
   return String(t).slice(0, 10);
 }
 
-/** 展示时间：后端已下发相对时间 timeText（刚刚/N分钟前/N小时前/N天前）时直接用，否则本地计算 */
-function displayTime(item) {
-  return item.timeText || relativeTime(item.time);
+/* ================= 跳转（后端 jumpTarget=ORDER 进订单，其余按消息类型） ================= */
+function jumpLabel(item) {
+  if (isPlayerApplication(item)) return '打手审核';
+  if (item.jumpTarget === 'ORDER' || item.orderId) return '订单详情';
+  if (item.type === NOTIFY_TYPE.STUCK) return '订单列表';
+  if (item.type === NOTIFY_TYPE.HANDOVER) return '交接日志';
+  return '系统通知';
+}
+function isPlayerApplication(item) {
+  const marker = `${item.scene || ''} ${item.sceneLabel || ''} ${item.title || ''} ${item.content || ''}`;
+  return /PLAYER.*(APPLICATION|APPLY|JOIN)|打手.{0,6}(入驻|申请)|入驻申请/.test(marker.toUpperCase());
+}
+function jumpTarget(item) {
+  if (isPlayerApplication(item)) {
+    return {
+      path: '/users/player-audit',
+      query: {
+        applicationId: item.applicationId || item.bizKey || '',
+        playerId: item.playerId || '',
+        name: item.playerName || '',
+        phone: item.phone || '',
+      },
+    };
+  }
+  if (item.jumpTarget === 'ORDER' || item.orderId) {
+    // 通知订单按第三方订单号定位；缺失时回落到平台订单号
+    const orderNo = item.thirdOrderNo || item.orderNo || '';
+    return { path: '/orders/list', query: { thirdOrderNo: orderNo } };
+  }
+  if (item.type === NOTIFY_TYPE.STUCK) return { path: '/orders/list' };
+  if (item.type === NOTIFY_TYPE.HANDOVER) return '/handover/log';
+  return '/notify';
 }
 
-/* ================= 类型标签 ================= */
-function typeLabel(item) {
-  // 后端下发的场景名称优先（sceneLabel，如「订单超时提醒」），本地 mock 消息回退类型元信息
-  return item.sceneLabel || TYPE_META[item.type]?.label || '系统通知';
+/** 点击查看：未读 → 先调接口标记已读，再按类型跳转对应页面 */
+async function handleView(item) {
+  if (!item.read) {
+    try {
+      await notifyApi.markRead(item.id);
+      item.read = true;
+      // 本地乐观减角标：不等后端 UNREAD 推送，铃铛/托盘角标立即减（后端权威随后校准）
+      notify.decrementBadge(1);
+    } catch {
+      // 接口不可用时（本地 mock 环境）回落到本地标记；真实环境 id 不在 store 中则为空操作
+      notify.markRead(item.id);
+      notify.syncTrayBadge();
+    }
+    // 已读完后若已无未读，显式收起托盘冒泡（冒泡以渲染进程未读列表为权威，已读项应消失）
+    if (!items.value.some((i) => !i.read) && window.notifyBridge && window.notifyBridge.setTrayList) {
+      window.notifyBridge.setTrayList({ count: 0, items: [], force: true });
+    }
+  }
+  router.push(jumpTarget(item));
 }
 
-/** 点击查看：未读 → 标记已读，并按需求图跳转规则跳转（无跳转仅标记已读） */
-function handleView(item) {
-  if (!item.read) notify.markRead(item.id);
-  const target = resolveNotifyTarget(item);
-  if (target) router.push(target);
-}
+/** 全部已读：接口无批量端点，按未读列表逐条提交，全部成功再更新本地状态 */
+async function handleMarkAllRead() {
+  const unread = items.value.filter((i) => !i.read);
+  if (!unread.length) return;
+  const results = await Promise.allSettled(unread.map((i) => notifyApi.markRead(i.id)));
+  const ok = results.filter((r) => r.status === 'fulfilled').length;
 
-function handleMarkAllRead() {
-  if (!notify.unreadCount) return;
-  notify.markAllRead();
-  show('已全部标记为已读', 'success');
-}
+  if (ok === 0) {
+    // 接口不可用（本地 mock 环境）：回落到本地全部已读，保持演示可用
+    unread.forEach((i) => {
+      i.read = true;
+    });
+    notify.markAllRead();
+    show('已全部标记为已读', 'success');
+    return;
+  }
 
-/** 拉取后端通知列表（失败时保留现有列表，错误已由 request.js toast） */
-async function load() {
-  loading.value = true;
-  try {
-    await notify.loadFromApi();
-  } finally {
-    loading.value = false;
+  unread.forEach((item, idx) => {
+    if (results[idx].status === 'fulfilled') item.read = true;
+  });
+  notify.items = items.value;
+  // 成功条数乐观减角标（全部成功则清零）
+  notify.decrementBadge(ok);
+  // 全部已读成功：显式收起托盘冒泡（冒泡以渲染进程未读列表为权威，已读项应消失）
+  if (ok === results.length && !items.value.some((i) => !i.read)) {
+    if (window.notifyBridge && window.notifyBridge.setTrayList) {
+      window.notifyBridge.setTrayList({ count: 0, items: [], force: true });
+    }
+  }
+  if (ok === results.length) {
+    show('已全部标记为已读', 'success');
+  } else {
+    show(`已标记 ${ok} 条，${results.length - ok} 条失败`, 'error');
   }
 }
 
 onMounted(() => {
-  // 进入本页：清空气泡 + 拉取后端通知列表
+  // 进入本页：清空气泡、停止托盘闪烁
   notify.clearBubbles();
-  load();
+  if (window.notifyBridge && window.notifyBridge.clearFlash) {
+    window.notifyBridge.clearFlash();
+  }
+  loadList();
 });
 </script>
 
@@ -91,18 +174,18 @@ onMounted(() => {
     <div class="notify-toolbar">
       <el-checkbox v-model="onlyUnread" class="only-unread-check">仅看未读</el-checkbox>
       <div class="toolbar-right">
-        <span v-if="notify.unreadCount" class="total-unread">未读 {{ notify.unreadCount }} 条</span>
+        <span v-if="unreadCount" class="total-unread">未读 {{ unreadCount }} 条</span>
         <!-- <button
           class="btn btn-plain btn-sm"
           type="button"
-          :disabled="!notify.unreadCount"
+          :disabled="!unreadCount"
           @click="handleMarkAllRead"
         >全部已读</button> -->
       </div>
     </div>
 
     <!-- 通知列表 -->
-    <div v-loading="loading" class="notify-list">
+    <div class="notify-list" v-loading="loading">
       <div
         v-for="item in filtered"
         :key="item.id"
@@ -113,9 +196,8 @@ onMounted(() => {
         <div class="item-body">
           <div class="item-head">
             <span v-if="!item.read" class="unread-dot" title="未读" />
-            <span class="type-chip" :class="TYPE_META[item.type]?.className">{{ typeLabel(item) }}</span>
             <strong class="item-title">{{ item.title }}</strong>
-            <span class="item-time">{{ displayTime(item) }}</span>
+            <span class="item-time">{{ relativeTime(item) }}</span>
           </div>
           <p class="item-content">{{ item.content }}</p>
         </div>
@@ -136,18 +218,16 @@ onMounted(() => {
 .system-notify-page {
   height: 100%;
   min-height: 0;
-  overflow: auto;
-  padding: 16px 20px 24px;
-  box-sizing: border-box;
-  /* 工具条固定：页面不整体滚动，列表区独立滚动 */
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  padding: 16px 20px 24px;
+  box-sizing: border-box;
+  overflow: hidden; /* 页面本身不滚动，工具条固定，仅列表区滚动 */
 }
 
 /* ===== 顶部工具条（固定，不随列表滚动） ===== */
 .notify-toolbar {
-  flex-shrink: 0;
+  flex-shrink: 0; /* 固定在这一栏，不随内容滚动 */
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -155,8 +235,7 @@ onMounted(() => {
   border-radius: 14px;
   padding: 12px 20px;
   margin-bottom: 14px;
-  box-shadow: 0 6px 18px rgba(30, 41, 59, 0.05);
-  z-index: 2;
+  box-shadow: var(--shadow);
 }
 
 .only-unread-check {
@@ -173,18 +252,19 @@ onMounted(() => {
 
 .total-unread {
   font-size: 12px;
-  color: var(--status-danger);
+  color: #d92d20;
   font-weight: 600;
 }
 
-/* ===== 通知列表（独立滚动区） ===== */
+/* ===== 通知列表（仅此区域滚动） ===== */
 .notify-list {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow-y: auto; /* 工具条固定后，只有列表区上下滚动 */
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding-right: 4px;
 }
 
 .notify-item {
@@ -193,9 +273,9 @@ onMounted(() => {
   gap: 16px;
   padding: 14px 16px;
   background: var(--bg-card);
-  border: 1px solid rgba(132, 146, 176, 0.12);
+  border: 1px solid var(--border-soft);
   border-radius: 14px;
-  box-shadow: 0 6px 18px rgba(30, 41, 59, 0.05);
+  box-shadow: var(--shadow);
   cursor: pointer;
   transition: all 0.18s ease;
 }
@@ -206,8 +286,8 @@ onMounted(() => {
 }
 
 .notify-item.unread {
-  background: linear-gradient(180deg, var(--primary-tint), var(--bg-elevated));
-  border-color: var(--primary-border-strong);
+  background: linear-gradient(180deg, var(--bg-elevated), var(--bg-card));
+  border-color: var(--primary-border);
 }
 
 .item-body {
@@ -226,33 +306,13 @@ onMounted(() => {
   color: var(--text-main);
 }
 
-/* ===== 类型标签 ===== */
-.type-chip {
-  flex-shrink: 0;
-  padding: 1px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.8;
-  color: var(--status-muted);
-  background: var(--status-muted-bg);
-}
-
-.type-chip.is-stuck { color: var(--status-danger); background: var(--status-danger-bg); }
-.type-chip.is-system { color: var(--status-muted); background: var(--status-muted-bg); }
-.type-chip.is-order-timeout { color: var(--status-warning); background: var(--status-warning-bg); }
-.type-chip.is-order-dispatch { color: var(--status-info); background: var(--status-info-bg); }
-.type-chip.is-order-closed { color: var(--status-muted); background: var(--status-muted-bg); }
-.type-chip.is-wallet-deduct { color: var(--status-warning); background: var(--status-warning-bg); }
-.type-chip.is-withdraw-fail { color: var(--status-danger); background: var(--status-danger-bg); }
-
 .unread-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--status-danger);
+  background: #ef4444;
   flex-shrink: 0;
-  box-shadow: 0 0 0 3px var(--status-danger-bg);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.14);
 }
 
 .item-time {
@@ -266,7 +326,7 @@ onMounted(() => {
   margin: 6px 0 0;
   font-size: 13px;
   line-height: 1.7;
-  color: var(--text-main);
+  color: var(--text-sub);
   word-break: break-all;
 }
 
@@ -300,12 +360,12 @@ onMounted(() => {
 }
 
 .btn-plain {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-sub);
 }
 
 .btn-plain:hover:not(:disabled) {
-  background: var(--border-faint);
+  background: var(--bg-hover-solid);
 }
 
 .btn-plain:disabled {

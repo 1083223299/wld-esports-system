@@ -3,7 +3,7 @@ import { request } from '../request';
 const { mock } = request;
 
 const store = {
-  siteName: '俱乐部后台管理',
+  siteName: '未来洞电竞管理后台',
   siteUrl: 'https://example.com',
   adminEmail: 'admin@example.com',
   pageSize: 10,

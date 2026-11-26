@@ -1,6 +1,8 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { fuzzyMatch, highlightHtml } from '../../utils/fuzzyMatch';
+import { useUserStore } from '../../stores/user';
 
 const props = defineProps({
   collapsed: {
@@ -11,68 +13,34 @@ const props = defineProps({
 
 const route = useRoute();
 const router = useRouter();
+const userStore = useUserStore();
+
+/** 当前登录角色（admin=管理员 / service=客服 / audit=审核员 / finance=财务） */
+const userRole = computed(() => userStore.role || 'admin');
 
 const openedKeys = ref(new Set());
+const closedKeys = ref(new Set());
 const hoveredKey = ref('');
+const menuSearchRef = ref(null);
 
-/* ===== 菜单模糊搜索 ===== */
-const keyword = ref('');
-const query = computed(() => keyword.value.trim().toLowerCase());
-const searching = computed(() => query.value.length > 0);
-
-/** 子串优先，其次按字符顺序的次序列（如 xtsz → 系统设置） */
-function matchLabel(text, q) {
-  const s = String(text || '');
-  if (!q) return { ok: true };
-  const lower = s.toLowerCase();
-  const idx = lower.indexOf(q);
-  if (idx >= 0) return { ok: true, mode: 'sub', start: idx, end: idx + q.length };
-  const hits = [];
-  let qi = 0;
-  for (let i = 0; i < s.length && qi < q.length; i++) {
-    if (lower[i] === q[qi]) {
-      hits.push(i);
-      qi += 1;
-    }
-  }
-  if (qi === q.length) return { ok: true, mode: 'fuzzy', hits };
-  return { ok: false };
+function focusSearch() {
+  menuSearchRef.value?.focus();
 }
 
-/** 把文字拆成 [{ t, hit }] 片段，hit 为命中段用于高亮 */
-function segments(text, q) {
-  const s = String(text || '');
-  const r = matchLabel(s, q);
-  if (!q || !r.ok) return [{ t: s, hit: false }];
-  if (r.mode === 'sub') {
-    return [
-      { t: s.slice(0, r.start), hit: false },
-      { t: s.slice(r.start, r.end), hit: true },
-      { t: s.slice(r.end), hit: false },
-    ].filter((x) => x.t);
-  }
-  const hitSet = new Set(r.hits);
-  const out = [];
-  let buf = '';
-  let bufHit = hitSet.has(0);
-  for (let i = 0; i < s.length; i++) {
-    const h = hitSet.has(i);
-    if (h !== bufHit) {
-      if (buf) out.push({ t: buf, hit: bufHit });
-      buf = '';
-      bufHit = h;
-    }
-    buf += s[i];
-  }
-  if (buf) out.push({ t: buf, hit: bufHit });
-  return out;
-}
+defineExpose({ focusSearch });
 
 function toggleGroup(key) {
-  const next = new Set(openedKeys.value);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
-  openedKeys.value = next;
+  if (isOpen(key)) {
+    const nextOpened = new Set(openedKeys.value);
+    nextOpened.delete(key);
+    openedKeys.value = nextOpened;
+    closedKeys.value = new Set([...closedKeys.value, key]);
+    return;
+  }
+  const nextClosed = new Set(closedKeys.value);
+  nextClosed.delete(key);
+  closedKeys.value = nextClosed;
+  openedKeys.value = new Set([...openedKeys.value, key]);
 }
 
 const isOpen = (key) => {
@@ -80,14 +48,13 @@ const isOpen = (key) => {
     return hoveredKey.value === key;
   }
 
+  if (searchingGroupKeys.value.has(key)) return true;
+  if (closedKeys.value.has(key)) return false;
   if (route.path === key || route.path.startsWith(`${key}/`)) return true;
   return openedKeys.value.has(key);
 };
 
-const isGroupVisible = (key) => {
-  if (searching.value) return true;
-  return isOpen(key);
-};
+const isGroupVisible = (key) => isOpen(key);
 
 const handleMenuEnter = (key) => {
   if (props.collapsed) {
@@ -112,6 +79,9 @@ const groupActive = (menu) =>
 
 const isVisible = (record) => {
   if (record.meta?.hidden || record.hidden) return false;
+  // 角色过滤：meta.roles 配置了可见角色时，当前角色不在其中则不显示
+  const roles = record.meta?.roles;
+  if (Array.isArray(roles) && !roles.includes(userRole.value)) return false;
   const children = record.children || [];
   if (children.length && !children.some(isVisible)) return false;
   return true;
@@ -154,60 +124,57 @@ const menus = computed(() => {
 
 const activeKey = computed(() => route.path);
 
-/** 按关键词过滤菜单：父级命中则展示其全部子级；子级命中则展示该项 */
+/* ================= 菜单模糊搜索 ================= */
+const keyword = ref('');
+const isSearching = computed(() => keyword.value.trim() !== '');
+
 const filteredMenus = computed(() => {
-  const q = query.value;
-  if (!q) return menus.value;
-  return menus.value
-    .map((m) => {
-      const parentHit = !!matchLabel(m.label, q).ok;
-      if (m.children) {
-        const kids = m.children.filter((c) => parentHit || matchLabel(c.label, q).ok);
-        return kids.length ? { ...m, children: kids } : null;
+  const kw = keyword.value.trim();
+  if (!kw) return menus.value;
+
+  const hit = (item) => fuzzyMatch(kw, item.label) || fuzzyMatch(kw, item.to);
+
+  return menus.value.reduce((acc, m) => {
+    if (m.children) {
+      if (hit(m)) {
+        acc.push(m);
+      } else {
+        const children = m.children.filter(hit);
+        if (children.length) acc.push({ ...m, children });
       }
-      return parentHit ? m : null;
-    })
-    .filter(Boolean);
+    } else if (hit(m)) {
+      acc.push(m);
+    }
+    return acc;
+  }, []);
 });
 
-const noResult = computed(() => searching.value && filteredMenus.value.length === 0);
-
-/** 扁平化的全部命中项，用于回车跳转第一条 */
-const flatMatches = computed(() => {
-  const out = [];
-  filteredMenus.value.forEach((m) => {
-    if (m.children) m.children.forEach((c) => out.push(c));
-    else out.push(m);
-  });
-  return out;
-});
-
-function clearKeyword() {
-  keyword.value = '';
-}
-
-function onSearchKeydown(e) {
-  if (e.key === 'Enter') {
-    const first = flatMatches.value[0];
-    if (first?.to) router.push(first.to);
-  } else if (e.key === 'Escape') {
-    clearKeyword();
+// 搜索时需要自动展开的分组
+const searchingGroupKeys = computed(() => {
+  const keys = new Set();
+  if (!isSearching.value) return keys;
+  for (const m of filteredMenus.value) {
+    if (m.children) keys.add(m.key);
   }
-}
+  return keys;
+});
 
-// 跳转后自动清空关键词，回到完整菜单
+const highlight = (text) => highlightHtml(keyword.value, text);
+
+// 跳转后恢复完整菜单
 watch(
   () => route.path,
   () => {
-    if (searching.value) clearKeyword();
+    keyword.value = '';
+    closedKeys.value = new Set();
   }
 );
 
-// 折叠时隐藏搜索框，同时清空关键词避免残留过滤
+// 折叠态没有搜索框，恢复完整菜单
 watch(
   () => props.collapsed,
-  (v) => {
-    if (v) clearKeyword();
+  (collapsed) => {
+    if (collapsed) keyword.value = '';
   }
 );
 </script>
@@ -219,36 +186,31 @@ watch(
         <span class="brand-tile">
           <img src="../../assets/images/logo.png" alt="logo" class="brand-logo" />
         </span>
-        <span class="brand-copy">
-          <span class="brand-text">未来电竞俱乐部</span>
-          <span class="brand-sub">FUTURE CLUB · 后台管理</span>
-        </span>
+        <span class="brand-text">未来洞电竞管理后台</span>
       </div>
     </div>
 
-    <!-- 菜单模糊搜索（折叠时隐藏） -->
-    <div class="menu-search">
-      <svg class="search-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.8" />
-        <path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-      </svg>
-      <input
+    <div v-if="!props.collapsed" class="sidebar-search">
+      <el-input
+        ref="menuSearchRef"
         v-model="keyword"
-        type="text"
-        class="search-input"
-        placeholder="搜索菜单"
-        aria-label="搜索菜单"
-        @keydown="onSearchKeydown"
-      />
-      <button v-if="searching" class="search-clear" type="button" aria-label="清空搜索" @click="clearKeyword">
-        ✕
-      </button>
+        class="menu-search-input"
+        placeholder="搜索菜单 (Ctrl+K)"
+        clearable
+        @keydown.esc.stop.prevent="keyword = ''"
+      >
+        <template #prefix>
+          <svg class="search-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5" />
+            <path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+          </svg>
+        </template>
+      </el-input>
     </div>
 
     <nav class="sidebar-nav" aria-label="主导航">
-      <p v-if="noResult" class="search-empty">未找到「{{ keyword.trim() }}」相关菜单</p>
-
-      <ul v-else class="menu">
+      <div v-if="isSearching && !filteredMenus.length" class="menu-empty">无匹配菜单</div>
+      <ul class="menu">
         <li v-for="m in filteredMenus" :key="m.key" class="menu-item">
           <template v-if="m.children">
             <div
@@ -259,11 +221,7 @@ watch(
             >
               <div class="menu-group-title" @click="toggleGroup(m.key)">
                 <SvgIcon v-if="m.icon" class="menu-icon" :icon-class="m.icon" />
-                <span class="menu-label">
-                  <template v-for="(seg, i) in segments(m.label, query)" :key="i"
-                    ><mark v-if="seg.hit" class="hl">{{ seg.t }}</mark><template v-else>{{ seg.t }}</template></template
-                  >
-                </span>
+                <span class="menu-label" v-html="highlight(m.label)"></span>
                 <span class="group-arrow" aria-hidden="true"></span>
               </div>
               <ul
@@ -274,11 +232,7 @@ watch(
                 <li v-for="child in m.children" :key="child.key">
                   <RouterLink :to="child.to" :class="{ active: activeKey === child.key }">
                     <span class="submenu-dot"></span>
-                    <span>
-                      <template v-for="(seg, i) in segments(child.label, query)" :key="i"
-                        ><mark v-if="seg.hit" class="hl">{{ seg.t }}</mark><template v-else>{{ seg.t }}</template></template
-                      >
-                    </span>
+                    <span v-html="highlight(child.label)"></span>
                   </RouterLink>
                 </li>
               </ul>
@@ -288,11 +242,7 @@ watch(
           <template v-else>
             <RouterLink :to="m.to" :class="{ active: activeKey === m.key, collapsed: props.collapsed }" :title="m.label">
               <SvgIcon v-if="m.icon" class="menu-icon" :icon-class="m.icon" />
-              <span class="menu-label">
-                <template v-for="(seg, i) in segments(m.label, query)" :key="i"
-                  ><mark v-if="seg.hit" class="hl">{{ seg.t }}</mark><template v-else>{{ seg.t }}</template></template
-                >
-              </span>
+              <span class="menu-label" v-html="highlight(m.label)"></span>
             </RouterLink>
           </template>
         </li>
@@ -318,193 +268,74 @@ watch(
   overflow: visible;
 }
 
-/* ===== 菜单模糊搜索 ===== */
-.menu-search {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 12px 12px 0;
-  padding: 0 10px;
-  height: 34px;
-  border-radius: 10px;
-  border: 1px solid var(--border-soft);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-sm);
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
-}
-
-.menu-search:focus-within {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-ring);
-}
-
-.search-icon {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  color: var(--text-sub);
-}
-
-.search-input {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: 12.5px;
-  color: var(--text-main);
-}
-
-.search-input::placeholder {
-  color: var(--text-faint);
-}
-
-.search-clear {
-  flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  border: none;
-  padding: 0;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  line-height: 1;
-  color: var(--text-sub);
-  background: var(--border-soft);
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-
-.search-clear:hover {
-  color: var(--primary);
-  background: var(--primary-soft);
-}
-
-.hl {
-  background: var(--primary-tint);
-  color: var(--primary);
-  border-radius: 3px;
-  padding: 0 1px;
-  font-weight: 700;
-}
-
-.search-empty {
-  margin: 18px 6px;
-  padding: 14px 12px;
-  text-align: center;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-sub);
-  border-radius: 10px;
-  background: var(--sidebar-group-bg);
-  border: 1px dashed var(--border-soft);
-}
-
-.sidebar.collapsed .menu-search {
-  display: none;
-}
-
 .sidebar-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 22px 18px 18px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border-soft);
-  position: relative;
-}
-
-.sidebar-header::after {
-  content: '';
-  position: absolute;
-  left: 18px;
-  right: 18px;
-  bottom: -1px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--primary-border-strong), transparent);
-  opacity: 0.5;
+  flex-shrink: 0;
+  /* 覆盖 layout.css 遗留的全局 .sidebar-header { height: 60px } */
+  height: auto;
 }
 
 .brand-wrap {
   display: flex;
   align-items: center;
+  gap: 10px;
   width: 100%;
   min-width: 0;
-  gap: 12px;
 }
 
 .brand-tile {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+  width: 34px;
+  height: 34px;
   flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* background: linear-gradient(135deg, var(--primary-light-5), var(--primary) 60%, var(--primary-deep));
-  box-shadow: 0 10px 22px -6px var(--primary-glow-strong),
-    inset 0 1px 0 rgba(255, 255, 255, 0.28); */
-  position: relative;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-faint);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-.brand-tile::after {
-  content: '';
-  position: absolute;
-  inset: 1px;
-  border-radius: 11px;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  pointer-events: none;
+.brand-wrap:hover .brand-tile {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px var(--primary-glow);
 }
 
 .brand-logo {
-  width: 40px;
-  height: 40px;
+  width: 22px;
+  height: 22px;
   object-fit: contain;
-  /* filter: brightness(0) invert(1); */
-  /* flex-shrink: 0; */
-}
-
-.brand-copy {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 2px;
 }
 
 .brand-text {
-  display: block;
-  font-size: 15px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 700;
   letter-spacing: 0.02em;
-  background: linear-gradient(90deg, var(--primary), var(--primary-hover));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.brand-sub {
-  display: block;
-  font-size: 9.5px;
-  letter-spacing: 0.16em;
-  color: var(--text-faint);
+  color: #8f5eff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-transform: uppercase;
+  min-width: 0;
 }
 
-.sidebar.collapsed .brand-wrap {
+.sidebar.collapsed .sidebar-header {
+  padding: 16px 0;
   justify-content: center;
 }
 
-.sidebar.collapsed .brand-text,
-.sidebar.collapsed .brand-sub {
+.sidebar.collapsed .brand-wrap {
+  width: auto;
+  justify-content: center;
+}
+
+.sidebar.collapsed .brand-tile {
+  width: 36px;
+  height: 36px;
+}
+
+.sidebar.collapsed .brand-text {
   display: none;
 }
 
@@ -513,6 +344,50 @@ watch(
   overflow: auto;
   padding: 12px 10px 16px;
 }
+
+/* ================= 菜单搜索 ================= */
+.sidebar-search {
+  padding: 12px 14px 0;
+}
+
+.sidebar-search .menu-search-input :deep(.el-input__wrapper) {
+  min-height: 34px;
+  padding: 1px 10px;
+  border-radius: 10px;
+  background: var(--input-bg);
+  box-shadow: 0 0 0 1px var(--input-border) inset;
+}
+
+.sidebar-search .menu-search-input :deep(.el-input__inner) {
+  font-size: 13px;
+}
+
+.sidebar-search .menu-search-input :deep(.el-input__inner::placeholder) {
+  color: var(--input-placeholder);
+}
+
+.sidebar-search .search-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-sub);
+}
+
+.menu-empty {
+  padding: 28px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-sub);
+}
+
+.menu :deep(.search-hl) {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.menu a.active :deep(.search-hl) {
+  color: inherit;
+}
+/* ================= 菜单搜索 end ================= */
 
 .sidebar.collapsed .sidebar-nav {
   overflow: visible;
@@ -660,13 +535,13 @@ watch(
   content: '';
   position: absolute;
   left: -7px;
-  top: 18px;
+  top: 50%;
   width: 12px;
   height: 12px;
   background: var(--bg-elevated);
   border-left: 1px solid var(--primary-border);
   border-bottom: 1px solid var(--primary-border);
-  transform: rotate(45deg);
+  transform: translateY(-50%) rotate(45deg);
 }
 
 .sidebar.collapsed .menu-group:hover .submenu,

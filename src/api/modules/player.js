@@ -1,71 +1,82 @@
 import { request } from '../request';
 
 /**
- * 打手管理（俱乐部）接口（真实后端）
- * 对应 OpenAPI：未来洞电竞/俱乐部后台/打手列表
- * - GET  /api/club/players                    本俱乐部打手列表（page/pageSize/status/keyword）
- * - POST /api/club/players                    新增打手（俱乐部）
- * - PUT  /api/club/players/{id}               编辑打手（俱乐部）
- * - PUT  /api/club/players/{id}/flags         打手状态位（退店：请求体只传 {"inStore":0}）
- * - GET  /api/club/players/{playerId}/specs   查本俱乐部打手规格
- * - PUT  /api/club/players/{playerId}/specs   配本俱乐部打手规格
- * 鉴权：Header Authorization: Bearer {token}（request.js 自动携带，三端 JWT 互不通用）
+ * 打手（管理端）
+ * 相关路径：
+ *   GET  /api/admin/players                    打手列表
+ *   POST /api/admin/players                    新增打手
+ *   GET  /api/admin/players/{id}               打手详情（编辑回显）
+ *   PUT  /api/admin/players/{id}               编辑打手
+ *   PUT  /api/admin/players/{id}/flags         退店/接单/钱包冻结
+ *   POST /api/admin/players/{id}/wallet-adjust 资产管理
+ *   GET  /api/admin/players/{playerId}/specs   查可接单规格
+ *   PUT  /api/admin/players/{playerId}/specs   改可接单规格
  */
-
-/** 拼接 query string（空值/undefined 不参与拼接） */
-function buildQuery(params = {}) {
-  const parts = Object.entries(params)
-    .filter(([, v]) => v !== undefined && v !== null && v !== '')
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
-  return parts.length ? `?${parts.join('&')}` : '';
-}
-
 export const playerApi = {
   /**
-   * 本俱乐部打手列表（服务端分页）
-   * @param {{page?:number, pageSize?:number, status?:string, keyword?:string}} params
-   * @returns {{page:number, pageSize:number, total:number, list:Array}}
+   * 打手列表 GET /api/admin/players
+   * 筛选：id/phone/clubId 完全匹配，name/clubName 模糊，
+   *       accountStatus 为 可接单/禁止接单/未冻结/冻结/在店/退店，
+   *       createdFrom/createdTo 创建时间（yyyy-MM-dd 或 yyyy-MM-ddTHH:mm:ss）
+   * @param {object} params { page, pageSize, id, name, phone, clubId, clubName, accountStatus, createdFrom, createdTo }
+   * @returns {Promise<{total:number,page:number,pageSize:number,list:Array}>}
    */
-  list: (params = {}) => request.get(`/api/club/players${buildQuery(params)}`),
+  list: (params = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === '') return;
+      qs.set(key, Array.isArray(value) ? value.join(',') : String(value));
+    });
+    const query = qs.toString();
+    return request.get(`/api/admin/players${query ? `?${query}` : ''}`);
+  },
+
+  /** 打手详情（编辑回显）GET /api/admin/players/{id} */
+  detail: (id) => request.get(`/api/admin/players/${id}`),
+
+  /** 新增打手 POST /api/admin/players，必填 name/phone/password/clubId */
+  create: (data = {}) => request.post('/api/admin/players', data),
 
   /**
-   * 新增打手（俱乐部）
-   * @param {{name:string, phone:string, password:string, clubId?:number}} data
+   * 编辑打手 PUT /api/admin/players/{id}
+   * password 不传或空串不修改；remark 不传保持原值、空串清除；files 不传保持原值、空数组清除
+   * @param {number} id
+   * @param {object} data { name?, phone?, password?, clubId?, remark?, files?, specs? }
    */
-  create: (data) => request.post('/api/club/players', data),
+  update: (id, data = {}) => request.put(`/api/admin/players/${id}`, data),
 
-  /**
-   * 编辑打手（俱乐部）
-   * @param {number} id 打手 ID
-   * @param {{name:string, phone:string, password?:string, clubId?:number}} data
-   */
-  update: (id, data) => request.put(`/api/club/players/${id}`, data),
+  /** 退店/接单/钱包冻结 PUT /api/admin/players/{id}/flags，只传要改的字段 */
+  updateFlags: (id, data = {}) => request.put(`/api/admin/players/${id}/flags`, data),
 
-  /**
-   * 打手退店（俱乐部）：请求体只传 {"inStore":0}
-   * @param {number} id 打手 ID
-   */
-  quitStore: (id) => request.put(`/api/club/players/${id}/flags`, { inStore: 0 }),
+  /** 资产管理 POST /api/admin/players/{id}/wallet-adjust */
+  walletAdjust: (id, data = {}) => request.post(`/api/admin/players/${id}/wallet-adjust`, data),
 
-  /**
-   * 查本俱乐部打手规格（按游戏分组）
-   * @param {number} playerId
-   * @returns {Array<{gameId:number, all:boolean, specIds:number[]}>}
-   */
-  getSpecs: (playerId) => request.get(`/api/club/players/${playerId}/specs`),
+  /** 查打手可接单规格 GET /api/admin/players/{playerId}/specs */
+  getSpecs: (playerId) => request.get(`/api/admin/players/${playerId}/specs`),
 
-  /**
-   * 当前俱乐部可配置的游戏/规格（真实后端数据）
-   * @returns {Promise<Array<{gameId:number, gameName?:string, all?:boolean,
-   *   specId?:number, specName?:string, specIds?:number[]}>>}
-   */
-  getMyAvailableSpecs: () => request.get('/api/club/specs/mine'),
+  /** 改打手可接单规格 PUT /api/admin/players/{playerId}/specs，body: { specs } */
+  updateSpecs: (playerId, specs) =>
+    request.put(`/api/admin/players/${playerId}/specs`, { specs }),
+};
 
-  /**
-   * 配本俱乐部打手规格（specs 传空数组表示清空）
-   * @param {number} playerId
-   * @param {Array<{gameId:number, all:boolean, specIds:number[]}>} specs
-   */
-  setSpecs: (playerId, specs) =>
-    request.put(`/api/club/players/${playerId}/specs`, { specs }),
+// 打手入驻审核；通过时提交已选择的游戏规格 ID，驳回原因最多 200 字。
+export const playerApplicationApi = {
+  /** 入驻审核列表（服务端分页/筛选）@param {object} params */
+  list: (params = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === '') return;
+      qs.set(key, Array.isArray(value) ? value.join(',') : String(value));
+    });
+    const query = qs.toString();
+    return request.get(`/api/admin/mp-player-applies${query ? `?${query}` : ''}`);
+  },
+
+  /** 审核通过：specIds 为可接单游戏规格 ID 数组。 */
+  approve: (id, specIds) =>
+    request.post(`/api/admin/mp-player-applies/${id}/approve`, { specIds }),
+
+  /** 审核驳回：rejectReason 最多 200 字。 */
+  reject: (id, rejectReason) =>
+    request.post(`/api/admin/mp-player-applies/${id}/reject`, { rejectReason }),
 };

@@ -1,26 +1,109 @@
 <script setup>
-import { onMounted } from 'vue';
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import dayjs from 'dayjs';
+import AppTopbar from './components/AppTopbar.vue';
 import ToastHost from './components/ToastHost.vue';
 import ConfirmHost from './components/ConfirmHost.vue';
 import WsBubbleHost from './components/WsBubbleHost.vue';
+import UpdateDialog from './components/UpdateDialog.vue';
+import { config, CURRENT_ENV, CLIENT_VERSION } from './config/env';
 import { useNotifyStore } from './stores/notify';
-import { requestNotifyPermission } from './utils/browserNotify';
+import { usePreferencesStore } from './stores/preferences';
+import { useUserStore } from './stores/user';
+import { applyWatermark, removeWatermark } from './utils/watermark';
+
+const route = useRoute();
+const router = useRouter();
+const isLoginPage = computed(() => route.name === 'Login');
 
 const notifyStore = useNotifyStore();
+const prefs = usePreferencesStore();
+const userStore = useUserStore();
+
+let offOpenNotify = null;
+let stopWatermarkWatch = null;
+let themeObserver = null;
+
+/** 水印文字：应用名 + 当前登录人 + 日期（登录人取自 userStore，登录/登出自动刷新） */
+function watermarkText() {
+  const who = userStore.displayName && userStore.displayName !== '未登录' ? userStore.displayName : '';
+  const date = dayjs().format('YYYY-MM-DD');
+  return who ? `未来洞电竞管理系统 · ${who} · ${date}` : `未来洞电竞管理系统 · ${date}`;
+}
 
 onMounted(() => {
-  // 初始化系统通知即时通讯通道（卡单订单推送 / 消息冒泡 / 铃铛提醒）
+  const info = { env: CURRENT_ENV, name: config.name, version: CLIENT_VERSION, baseURL: config.apibaseURL };
+  console.log('[ENV] 当前环境:', info);
+  if (window.appInfo) {
+    window.appInfo.reportEnv(info);
+  }
+
+  // 初始化系统通知即时通讯通道（卡单订单推送 / 消息冒泡 / 托盘闪烁）
   notifyStore.init();
 
-  // 首次用户交互时请求浏览器通知权限（授权后新消息可在操作系统层面弹系统通知）
-  const requestPermission = () => requestNotifyPermission();
-  window.addEventListener('pointerdown', requestPermission, { once: true });
-  window.addEventListener('keydown', requestPermission, { once: true });
+  // 窗口重新聚焦时停止托盘闪烁（提醒目的已达到）
+  if (window.notifyBridge && window.notifyBridge.clearFlash) {
+    window.addEventListener('focus', () => window.notifyBridge.clearFlash());
+  }
+
+  // 主进程拉起系统通知相关页面（点击托盘悬停未读列表条目 / 冒泡小窗跳转时触发）
+  if (window.notifyBridge && window.notifyBridge.onOpenNotify) {
+    offOpenNotify = window.notifyBridge.onOpenNotify((payload) => {
+      const target = typeof payload === 'string' ? { path: payload } : payload || {};
+      router.push(target.path || '/notify');
+      if (target.notificationId != null) {
+        notifyStore.markNotificationRead(target.notificationId);
+      }
+    });
+  }
+
+  // 页面水印（设置面板开关控制）：开启时立即挂载，关闭时移除；登录人变化时刷新水印文字
+  if (prefs.watermark) {
+    applyWatermark(watermarkText());
+  }
+  stopWatermarkWatch = watch(
+    () => `${prefs.watermark}:${userStore.displayName}`,
+    () => {
+      if (prefs.watermark) applyWatermark(watermarkText());
+      else removeWatermark();
+    }
+  );
+
+  // 主题切换（含「跟随系统」在明暗之间自动切换）时重绘水印：
+  // 深色主题需改用浅色水印，否则深色底上的黑色水印几乎不可见
+  if (typeof MutationObserver !== 'undefined') {
+    themeObserver = new MutationObserver(() => {
+      if (prefs.watermark) applyWatermark(watermarkText());
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    });
+  }
+});
+
+onBeforeUnmount(() => {
+  if (offOpenNotify) {
+    offOpenNotify();
+    offOpenNotify = null;
+  }
+  if (stopWatermarkWatch) {
+    stopWatermarkWatch();
+    stopWatermarkWatch = null;
+  }
+  if (themeObserver) {
+    themeObserver.disconnect();
+    themeObserver = null;
+  }
+  removeWatermark();
 });
 </script>
 
 <template>
   <div class="app-frame">
+    <AppTopbar v-if="isLoginPage" />
+
     <div class="app-root">
       <router-view />
     </div>
@@ -28,6 +111,7 @@ onMounted(() => {
     <ToastHost />
     <ConfirmHost />
     <WsBubbleHost />
+    <UpdateDialog />
   </div>
 </template>
 
@@ -39,7 +123,10 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   background: var(--bg-page);
+  border-radius: 20px;
   overflow: hidden;
+  border: 1px solid var(--app-frame-border);
+  /* box-shadow: 1px 1px 70px rgba(8, 5, 28, .6), 0 2px 12px rgba(8, 5, 28, .45), inset 0 0 0 1px hsla(0, 0%, 100%, .04); */
 }
 
 .app-root {

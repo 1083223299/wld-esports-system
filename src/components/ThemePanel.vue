@@ -1,21 +1,29 @@
 <script setup>
-import { computed, ref } from 'vue';
-import { useThemeStore } from '../stores/theme';
+import { ref, watch } from 'vue';
+import { useThemeStore, SYSTEM_THEME } from '../stores/theme';
 import { themes } from '../theme/themes';
 
 const themeStore = useThemeStore();
 const open = ref(false);
 
-/** 色板仅展示真实主题，跟随系统单独作为开关 */
-const paletteThemes = computed(() => themes.filter((t) => t.id !== 'system'));
+/** 跟随系统开关状态（同步 store.name） */
+const followSystem = ref(themeStore.name === SYSTEM_THEME);
+
+watch(
+  () => themeStore.name,
+  (name) => {
+    followSystem.value = name === SYSTEM_THEME;
+  }
+);
 
 function pick(id) {
   themeStore.apply(id);
 }
 
-/** 跟随系统开关：开启走 system；关闭沿用当前解析到的真实主题，界面不跳变 */
-function toggleSystem(val) {
-  themeStore.apply(val ? 'system' : themeStore.resolvedId);
+/** 切换跟随系统：开启进入 system 模式，关闭回到基础主题 */
+function onFollowSystem(val) {
+  if (val) themeStore.apply(SYSTEM_THEME);
+  else themeStore.apply(themeStore.baseName);
 }
 </script>
 
@@ -57,46 +65,27 @@ function toggleSystem(val) {
           </span>
         </div>
 
-        <div class="system-row">
-          <span class="system-label">跟随系统</span>
-          <el-switch
-            class="system-switch"
-            :model-value="themeStore.isSystem"
-            aria-label="跟随系统"
-            @change="toggleSystem"
-          />
+        <!-- 跟随系统：随系统明暗自动切换 -->
+        <div class="system-toggle">
+          <span class="system-title">跟随系统</span>
+          <el-switch v-model="followSystem" size="small" @change="onFollowSystem" />
         </div>
 
-        <div class="swatch-grid">
+        <!-- 色板选择 -->
+        <div class="swatch-row">
           <button
-            v-for="t in paletteThemes"
+            v-for="t in themes"
             :key="t.id"
             class="swatch"
-            :class="{ active: t.id === themeStore.resolvedId }"
+            :class="{ active: t.id === themeStore.name }"
             type="button"
             :title="t.name"
-            :aria-label="t.name"
             @click="pick(t.id)"
           >
-            <span class="swatch-fill" :style="{ background: t.swatch }">
-              <svg
-                v-if="t.id === themeStore.resolvedId"
-                class="swatch-check"
-                viewBox="0 0 12 12"
-                width="12"
-                height="12"
-                aria-hidden="true"
-              >
-                <path
-                  d="M2.5 6.5 5 9l4.5-5.5"
-                  stroke="#ffffff"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  fill="none"
-                />
-              </svg>
+            <span class="swatch-dot" :style="{ background: t.preview.primary }">
+              <span v-if="t.id === themeStore.name" class="swatch-check">✓</span>
             </span>
+            <!-- <span class="swatch-name">{{ t.name }}</span> -->
           </button>
         </div>
 
@@ -114,6 +103,7 @@ function toggleSystem(val) {
 .theme-switcher {
   position: relative;
   display: inline-flex;
+  -webkit-app-region: no-drag;
 }
 
 /* ---- 触发按钮：圆形渐变描边 + 主题色圆点 ---- */
@@ -160,14 +150,14 @@ function toggleSystem(val) {
   position: absolute;
   top: calc(100% + 12px);
   right: -4px;
-  width: 230px;
-  padding: 14px 16px;
+  width: 358px;
+  padding: 16px;
   z-index: 61;
   background: var(--panel-glass);
   -webkit-backdrop-filter: blur(20px);
   backdrop-filter: blur(20px);
   border: 1px solid var(--border-soft);
-  border-radius: 14px;
+  border-radius: 18px;
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   text-align: left;
 }
@@ -178,13 +168,14 @@ function toggleSystem(val) {
   justify-content: space-between;
 }
 .panel-title {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-main);
+  letter-spacing: 0.02em;
 }
 .panel-mode {
-  font-size: 10px;
-  padding: 2px 8px;
+  font-size: 11px;
+  padding: 3px 10px;
   border-radius: 999px;
   font-weight: 600;
 }
@@ -197,55 +188,89 @@ function toggleSystem(val) {
   color: var(--text-invert);
 }
 
-/* ---- 跟随系统开关行 ---- */
-.system-row {
+/* ---- 跟随系统开关 ---- */
+.system-toggle {
+  margin-top: 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-soft);
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-elevated);
 }
-.system-label {
-  font-size: 12px;
+.system-title {
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text-main);
 }
 
-/* ---- 色板 ---- */
-.swatch-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 12px;
-  margin-top: 14px;
+/* ---- 色板选择 ---- */
+.swatch-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 16px;
 }
 .swatch {
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border: none;
   background: transparent;
-  border-radius: 50%;
   cursor: pointer;
-  transition: transform 0.18s ease;
+  border-radius: 10px;
+  transition: background 0.15s ease;
 }
-.swatch-fill {
+.swatch:hover {
+  background: var(--primary-soft);
+}
+
+.swatch-dot {
   position: relative;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--border-soft);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.swatch:hover .swatch-dot {
+  border-color: var(--primary-border-strong);
+}
+.swatch.active .swatch-dot {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-soft);
+}
+
+.swatch-check {
+  position: absolute;
+  inset: 0;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  border: 1px solid var(--border-soft);
-  transition: transform 0.18s ease;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
-.swatch:hover .swatch-fill {
-  transform: scale(1.12);
+
+.swatch-name {
+  font-size: 11px;
+  color: var(--text-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
-.swatch:active .swatch-fill {
-  transform: scale(0.98);
-}
-.swatch-check {
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
+.swatch.active .swatch-name {
+  color: var(--primary);
+  font-weight: 600;
 }
 
 /* ---- 底部提示 ---- */

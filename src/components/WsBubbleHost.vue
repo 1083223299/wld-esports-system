@@ -15,13 +15,8 @@ const router = useRouter();
 
 const ICONS = {
   [NOTIFY_TYPE.STUCK]: { text: '卡', title: '卡单预警' },
+  [NOTIFY_TYPE.HANDOVER]: { text: '交', title: '交接提醒' },
   [NOTIFY_TYPE.SYSTEM]: { text: '告', title: '系统公告' },
-  [NOTIFY_TYPE.ORDER_TIMEOUT]: { text: '超', title: '订单超时' },
-  [NOTIFY_TYPE.ORDER_DISPATCH]: { text: '单', title: '订单消息' },
-  [NOTIFY_TYPE.ORDER_CLOSED]: { text: '取', title: '订单取消' },
-  [NOTIFY_TYPE.WALLET_DEDUCT]: { text: '扣', title: '转单扣款' },
-  [NOTIFY_TYPE.WITHDRAW_FAIL]: { text: '提', title: '提现失败' },
-  [NOTIFY_TYPE.DEPOSIT_WITHDRAW_FAIL]: { text: '提', title: '提现失败' },
 };
 
 function openList(bubble) {
@@ -111,30 +106,14 @@ function openList(bubble) {
   box-shadow: 0 6px 14px rgba(239, 68, 68, 0.3);
 }
 
+.is-handover .bubble-icon {
+  background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+  box-shadow: 0 6px 14px var(--primary-glow);
+}
+
 .is-system .bubble-icon {
   background: linear-gradient(135deg, #64748b, #94a3b8);
   box-shadow: 0 6px 14px rgba(100, 116, 139, 0.28);
-}
-
-.is-order-timeout .bubble-icon,
-.is-order-dispatch .bubble-icon {
-  background: linear-gradient(135deg, #2563eb, #60a5fa);
-  box-shadow: 0 6px 14px rgba(37, 99, 235, 0.28);
-}
-
-.is-order-closed .bubble-icon {
-  background: linear-gradient(135deg, #64748b, #94a3b8);
-  box-shadow: 0 6px 14px rgba(100, 116, 139, 0.28);
-}
-
-.is-wallet-deduct .bubble-icon {
-  background: linear-gradient(135deg, #d97706, #fbbf24);
-  box-shadow: 0 6px 14px rgba(217, 119, 6, 0.28);
-}
-
-.is-withdraw-fail .bubble-icon {
-  background: linear-gradient(135deg, #ef4444, #f97316);
-  box-shadow: 0 6px 14px rgba(239, 68, 68, 0.3);
 }
 
 .bubble-body {

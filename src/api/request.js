@@ -1,199 +1,234 @@
 import { config } from '../config/env';
-import { getToken, removeToken } from '../utils/auth';
+import { getToken, clearAuth } from '../utils/auth';
 import { useToast } from '../composables/useToast';
-import { ElMessageBox } from 'element-plus';
+import { useConfirm } from '../composables/useConfirm';
 
+// 接口基础地址与超时时间（来自环境配置，默认 8 秒）
 const BASE_URL = config.apibaseURL;
 const TIMEOUT = config.timeout || 8000;
+const AUTH_EXPIRED_MESSAGE = '登录状态已失效';
+let authExpiredPrompt = null;
 
+// 请求/响应拦截器容器：before 为请求拦截器，after 为响应拦截器
 const requestInterceptors = {
   before: [],
   after: [],
 };
 
-let authFailurePrompted = false;
-let authPromptPromise = null;
-let authFailureToastAt = 0;
-
-window.addEventListener('auth:restored', () => {
-  authFailurePrompted = false;
-  authPromptPromise = null;
-  authFailureToastAt = 0;
-});
-
+// 注册请求拦截器，fn 接收当前 requestConfig，可返回修改后的配置（或返回 null 保持不变）
 export function addRequestInterceptor(fn) {
   requestInterceptors.before.push(fn);
 }
 
+// 注册响应拦截器，fn 接收 (result, res, payload)，可返回新结果覆盖默认值
 export function addResponseInterceptor(fn) {
   requestInterceptors.after.push(fn);
 }
 
+// 统一弹出错误提示
 function notifyError(message) {
   const { show } = useToast();
   show(message, 'error');
 }
 
-async function handleUnauthorized(errorMessage) {
-  if (!getToken()) {
-    notifyError(errorMessage);
-    return;
-  }
-
-  if (!authFailurePrompted) {
-    authFailurePrompted = true;
-    window.dispatchEvent(new CustomEvent('auth:expired'));
-    authPromptPromise = ElMessageBox.confirm(
-      '当前登录状态已失效，部分操作无法继续。选择“留在当前页”可继续查看页面，但账号功能需要重新登录后才能恢复。',
-      '账号状态异常',
-      {
-        confirmButtonText: '退出登录',
-        cancelButtonText: '留在当前页',
-        distinguishCancelAndClose: true,
-        closeOnClickModal: false,
-        closeOnPressEscape: false,
-        type: 'warning',
-      },
-    )
-      .then(() => {
-        removeToken();
-        window.location.hash = '#/login';
+function promptForReauthentication() {
+  if (!authExpiredPrompt) {
+    const { confirm } = useConfirm();
+    authExpiredPrompt = confirm({
+      title: '登录状态已失效',
+      message: '当前登录状态已失效，是否重新登录？',
+      okText: '立即登录',
+      cancelText: '留在当前页',
+    })
+      .then((shouldLogin) => {
+        if (shouldLogin) {
+          clearAuth();
+          window.location.hash = '#/login';
+        }
       })
-      .catch(() => {})
       .finally(() => {
-        authPromptPromise = null;
+        authExpiredPrompt = null;
       });
   }
-
-  if (authPromptPromise) {
-    await authPromptPromise;
-    return;
-  }
-
-  const now = Date.now();
-  if (now - authFailureToastAt > 3000) {
-    authFailureToastAt = now;
-    notifyError('账号登录状态异常，当前操作未完成');
-  }
+  return authExpiredPrompt;
 }
 
-async function http({ url, method = 'GET', data, headers = {}, timeout = TIMEOUT }) {
+/**
+ * 核心 HTTP 请求函数
+ * @param {object} options - 请求配置 { url, method, data, headers }
+ * @returns {Promise<any>} 解析后的业务数据
+ * 流程：超时控制 -> 请求拦截 -> 附加 token -> fetch -> 解析响应
+ *      -> 401/HTTP 错误/业务码错误处理 -> 响应拦截 -> 返回 data
+ */
+async function http({
+  url,
+  method = 'GET',
+  data,
+  headers = {},
+  responseType = 'json',
+  timeout = TIMEOUT,
+  notifyErrors = true,
+}) {
+  // 超时控制：超过指定时长则中断请求
   const controller = new AbortController();
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeout);
+  const timer = setTimeout(() => controller.abort(), timeout);
 
-  // FormData（文件上传）不走 JSON 序列化，且 Content-Type 交由浏览器自动带 boundary
-  const isFormData = typeof FormData !== 'undefined' && data instanceof FormData;
-
+  // 默认请求头，Accept 指定优先返回 JSON
   let requestConfig = { url, method, headers: { Accept: 'application/json', ...headers } };
 
+  // 依次执行请求拦截器，允许每个拦截器修改配置
   for (const interceptor of requestInterceptors.before) {
     requestConfig = (await interceptor(requestConfig)) || requestConfig;
   }
 
+  // 若存在 token 且调用方未手动设置 Authorization，则自动附加 Bearer token
   const authToken = getToken();
   if (authToken && !requestConfig.headers.Authorization) {
     requestConfig.headers.Authorization = `Bearer ${authToken}`;
   }
 
-  // 401 分支已自行 toast，catch 里不再重复提示
-  let notified = false;
-
   try {
+    // 绝对地址直接使用，相对地址拼接 BASE_URL
     const targetUrl = /^https?:\/\//.test(requestConfig.url)
       ? requestConfig.url
       : `${BASE_URL}${requestConfig.url}`;
 
+    // FormData（文件上传）：不手动设置 Content-Type，交给浏览器携带 boundary
+    const isFormData = typeof FormData !== 'undefined' && data instanceof FormData;
+
+    // 发起请求：普通对象序列化为 JSON 字符串，FormData 原样传递，无 data 则不传 body
     const res = await fetch(targetUrl, {
       method: requestConfig.method,
-      headers: {
-        ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-        ...requestConfig.headers,
-      },
-      body: isFormData ? data : data !== undefined && data !== null ? JSON.stringify(data) : undefined,
+      headers: isFormData
+        ? { Accept: 'application/json', ...requestConfig.headers }
+        : {
+            'Content-Type': 'application/json',
+            ...requestConfig.headers,
+          },
+      body: isFormData
+        ? data
+        : data !== undefined && data !== null
+          ? JSON.stringify(data)
+          : undefined,
       signal: controller.signal,
     });
 
+    // 按 Content-Type 解析响应体：JSON 解析为对象，其余按纯文本
     let payload = null;
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
       payload = await res.json();
+    } else if (responseType === 'blob' && res.ok) {
+      payload = await res.blob();
     } else {
-      payload = await res.text();
-    }
-
-    // ---- 错误归一化：错误提示一律直接取后端返回的 message ----
-    const isObject = payload && typeof payload === 'object';
-    const bodyMessage = isObject ? payload.message : null;
-
-    // 401 未授权：HTTP 状态码 401，或响应体 code=401 / bizCode=UNAUTHORIZED
-    const unauthorized =
-      res.status === 401 ||
-      (isObject && (payload.code === 401 || payload.bizCode === 'UNAUTHORIZED'));
-
-    // 后端没给 message 时才用兜底文案
-    const errorMessage =
-      bodyMessage || (unauthorized ? '登录已过期，请重新登录' : `请求失败（HTTP ${res.status}）`);
-
-    // 统一把 code/bizCode/httpStatus 挂到 Error 上，供业务分支（如 ORDER_TAKEN）识别
-    const attachErrorMeta = (err) => {
-      if (isObject) {
-        err.code = payload.code;
-        err.bizCode = payload.bizCode;
+      const text = await res.text();
+      // 兼容：部分网关/代理会改写 Content-Type 为非 JSON，但响应体实为 JSON
+      const trimmed = text.trim();
+      if (trimmed && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
+        try {
+          payload = JSON.parse(trimmed);
+        } catch (e) {
+          payload = text;
+        }
+      } else {
+        payload = text;
       }
-      err.status = res.status;
-      return err;
-    };
-
-    if (unauthorized) {
-      notified = true;
-      await handleUnauthorized(errorMessage);
-      throw attachErrorMeta(new Error(errorMessage));
     }
 
+    // 401：仅当请求携带了 Authorization（登录后会话失效）才清除 token 并跳转登录页；
+    // 未带 token 的 401（如登录时账号密码错误）落到下方通用错误分支，直接展示后端返回的 message
+    if (res.status === 401) {
+      if (requestConfig.headers.Authorization) {
+        await promptForReauthentication();
+        throw new Error(AUTH_EXPIRED_MESSAGE);
+      }
+    }
+
+    // 非 2xx 状态码：抛出后端返回的 message 或 HTTP 状态码
     if (!res.ok) {
-      throw attachErrorMeta(new Error(errorMessage));
+      const errorMessage = payload && payload.message ? payload.message : `HTTP ${res.status}`;
+      const error = new Error(errorMessage);
+      error.code = payload?.bizCode || payload?.code || res.status;
+      error.status = res.status;
+      throw error;
     }
 
-    if (isObject && 'code' in payload && payload.code !== 0 && payload.code !== 200) {
-      throw attachErrorMeta(new Error(bodyMessage || '业务处理失败'));
+    // 业务码校验：code 不为 0/200 视为业务失败（兼容两种成功码约定；数字字符串如 "0"/"200" 一并兼容）
+    if (payload && typeof payload === 'object' && 'code' in payload) {
+      const bizCode = Number(payload.code);
+      if (bizCode !== 0 && bizCode !== 200) {
+        const error = new Error(payload.message || '业务处理失败');
+        error.code = payload.bizCode || payload.code;
+        error.status = res.status;
+        throw error;
+      }
     }
 
-    let result = isObject && 'data' in payload ? payload.data : payload;
+    // 提取 data 字段（无 data 包裹则直接返回 payload），再依次执行响应拦截器
+    let result = payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
     for (const interceptor of requestInterceptors.after) {
       result = (await interceptor(result, res, payload)) ?? result;
     }
 
     return result;
   } catch (error) {
-    const requestError = timedOut
-      ? new Error(`请求超时（${timeout / 1000}秒），请稍后重试`)
-      : error;
-    const message = requestError?.message || '请求失败';
-    if (!notified) {
+    // 登录失效由确认框处理，这里不再重复弹出错误提示。
+    const message = error?.message || '请求失败';
+    if (message === AUTH_EXPIRED_MESSAGE && error && typeof error === 'object') {
+      error.requestNotified = true;
+    } else if (notifyErrors) {
       notifyError(message);
+      if (error && typeof error === 'object') error.requestNotified = true;
     }
-    throw requestError;
+    throw error;
   } finally {
+    // 无论成功失败都清除超时定时器
     clearTimeout(timer);
   }
 }
 
+/**
+ * 模拟异步接口（本地 Mock 数据）
+ * @param {any} payload - 要返回的数据
+ * @param {number} delay - 模拟延迟毫秒数，默认 300ms
+ * 返回深拷贝，避免外部直接修改内部数据
+ */
 function mock(payload, delay = 300) {
   return new Promise((resolve) => {
     setTimeout(() => resolve(JSON.parse(JSON.stringify(payload))), delay);
   });
 }
 
+// 对外导出的请求工具：真实 HTTP 请求 + Mock + 常用方法快捷方式
 export const request = {
   http,
   mock,
   get: (url, headers) => http({ url, method: 'GET', headers }),
   post: (url, data, headers) => http({ url, method: 'POST', data, headers }),
-  put: (url, data, headers, options = {}) =>
-    http({ url, method: 'PUT', data, headers, ...options }),
+  put: (url, data, headers) => http({ url, method: 'PUT', data, headers }),
   del: (url, headers) => http({ url, method: 'DELETE', headers }),
+  /** 文件上传：data 为 FormData，自动走 multipart（POST） */
+  upload: (url, formData, options = {}) => {
+    const { headers = {}, timeout = 60000, notifyErrors = true } = options;
+    return http({ url, method: 'POST', data: formData, headers, timeout, notifyErrors });
+  },
+  /** 文件下载：成功响应按 Blob 返回，失败响应仍按 JSON/文本解析 */
+  download: (url, options = {}) => {
+    const {
+      headers = {},
+      timeout = 60000,
+      notifyErrors = true,
+    } = options;
+    return http({
+      url,
+      method: 'GET',
+      headers: {
+        Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/octet-stream, application/json',
+        ...headers,
+      },
+      responseType: 'blob',
+      timeout,
+      notifyErrors,
+    });
+  },
 };
