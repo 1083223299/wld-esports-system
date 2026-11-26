@@ -1108,6 +1108,7 @@ const specGameRows = ref([]); // [{ gameId, gameName, specs, all, checked:Set<nu
 const batchSpecVisible = ref(false);
 const batchSpecLoading = ref(false);
 const batchSubmitting = ref(false);
+const batchSubmitProgress = ref('');
 const batchSpecGames = ref([]);
 const batchSpecKeyword = ref('');
 const batchSpecFilter = ref('all');
@@ -1410,26 +1411,12 @@ async function submitBatchSpec() {
     show('请至少选择一个俱乐部', 'warning');
     return;
   }
-  if (selectedClubs.length > 100) {
-    show('单次最多选择 100 家俱乐部', 'warning');
-    return;
-  }
-  if (selectedSpecs.length > 200) {
-    show('单次最多选择 200 个规格', 'warning');
-    return;
-  }
-  if (selectedClubs.length * selectedSpecs.length > 5000) {
-    show('俱乐部与规格组合不能超过 5000 组', 'warning');
-    return;
-  }
-
   const missingAmount = selectedSpecs.find((spec) => !hasBatchFixedProfitAmount(spec));
   if (missingAmount) {
     show(`请填写「${missingAmount.gameName}·${missingAmount.name}」的固定金额`, 'warning');
     return;
   }
-  const configuredSpecs = selectedSpecs;
-  const invalidSpec = configuredSpecs.find((spec) => {
+  const invalidSpec = selectedSpecs.find((spec) => {
     const rawAmount = String(batchFixedProfitAmounts[spec.id]).trim();
     const amount = Number(rawAmount);
     return !Number.isFinite(amount) || amount < 0 ||
@@ -1439,36 +1426,62 @@ async function submitBatchSpec() {
     show(`「${invalidSpec.gameName}·${invalidSpec.name}」金额需为非负数，最多两位小数`, 'warning');
     return;
   }
-  const payload = {
-    clubIds: selectedClubs,
-    specs: selectedSpecs.map((spec) => {
-      const item = { gameId: spec.gameId, specId: Number(spec.id) };
-      const rawAmount = batchFixedProfitAmounts[spec.id];
-      if (hasBatchFixedProfitAmount(spec)) {
-        item.fixedProfitAmount = Number(rawAmount);
-      }
-      return item;
-    }),
-  };
-
+  const configuredSpecs = selectedSpecs.map((spec) => {
+    const item = { gameId: spec.gameId, specId: Number(spec.id) };
+    const rawAmount = batchFixedProfitAmounts[spec.id];
+    if (hasBatchFixedProfitAmount(spec)) {
+      item.fixedProfitAmount = Number(rawAmount);
+    }
+    return item;
+  });
+  const batches = [];
+  for (let clubIndex = 0; clubIndex < selectedClubs.length; clubIndex += 100) {
+    const clubIds = selectedClubs.slice(clubIndex, clubIndex + 100);
+    const maxSpecsPerBatch = Math.min(200, Math.floor(5000 / clubIds.length));
+    for (let specIndex = 0; specIndex < configuredSpecs.length; specIndex += maxSpecsPerBatch) {
+      batches.push({
+        clubIds,
+        specs: configuredSpecs.slice(specIndex, specIndex + maxSpecsPerBatch),
+      });
+    }
+  }
+  const results = [];
   batchSubmitting.value = true;
-  let result;
+  batchSubmitProgress.value = `准备提交 ${batches.length} 批`;
   try {
-    result = await clubApi.batchAddSpecs(payload);
-  } catch {
-    return;
+    for (let index = 0; index < batches.length; index += 1) {
+      batchSubmitProgress.value = `正在提交第 ${index + 1}/${batches.length} 批`;
+      try {
+        const result = await clubApi.batchAddSpecs({
+          clubIds: batches[index].clubIds,
+          specs: batches[index].specs,
+        });
+        results.push(result);
+      } catch {
+        if (results.length) {
+          show(
+            `批量新增部分完成：已完成 ${results.length}/${batches.length} 批；第 ${index + 1} 批失败，后续未提交。请检查已成功数据后重试。`,
+            'warning',
+            8000
+          );
+        }
+        return;
+      }
+    }
   } finally {
     batchSubmitting.value = false;
+    batchSubmitProgress.value = '';
   }
 
   batchSpecVisible.value = false;
+  const count = (key) => results.reduce((sum, result) => sum + (Number(result?.[key]) || 0), 0);
   const summary = [
-    `新增授权 ${Number(result?.permissionAddedCount) || 0}`,
-    `已存在跳过 ${Number(result?.permissionExistingCount) || 0}`,
-    `新建分润 ${Number(result?.profitCreatedCount) || 0}`,
-    `更新分润 ${Number(result?.profitUpdatedCount) || 0}`,
+    `新增授权 ${count('permissionAddedCount')}`,
+    `已存在跳过 ${count('permissionExistingCount')}`,
+    `新建分润 ${count('profitCreatedCount')}`,
+    `更新分润 ${count('profitUpdatedCount')}`,
   ].join('，');
-  show(`批量新增成功：${Number(result?.clubCount) || selectedClubs.length} 家俱乐部，${Number(result?.specCount) || selectedSpecs.length} 个规格；${summary}`, 'success', 6000);
+  show(`批量新增成功：${selectedClubs.length} 家俱乐部，${selectedSpecs.length} 个规格；${summary}`, 'success', 6000);
   fetchList().catch(() => show('批量新增已完成，但俱乐部列表刷新失败', 'warning'));
 }
 
@@ -2621,7 +2634,7 @@ onMounted(fetchList);
           :disabled="batchSubmitting || batchSpecLoading || batchTemplateApplying != null || !batchSelectedSpecCount || !batchSelectedClubs.length"
           @click="submitBatchSpec"
         >
-          {{ batchSubmitting ? '提交中…' : '确认批量新增' }}
+          {{ batchSubmitProgress || (batchSubmitting ? '提交中…' : '确认批量新增') }}
         </button>
       </template>
     </AppModal>
