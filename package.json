@@ -1,7 +1,7 @@
 {
   "//": "Electron 桌面端主配置文件；JSON 不支持注释，本文件通过 '//': '说明' 字段实现注释（npm/electron-builder 会原样保留）",
   "name": "my-electron-app",
-  "version": "1.0.38",
+  "version": "1.0.37",
   "description": "未来洞电竞一站式操作系统",
   "main": "main.js",
   "scripts": {
