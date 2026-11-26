@@ -452,11 +452,11 @@ async function requestQuitWithUpdateCheck() {
 }
 
 /* ================= 托盘图标：角标气泡 + 整体闪动（系统通知提醒） ================= */
-const NORMAL_TRAY_ICON = path.join(__dirname, 'src', 'assets', 'images', 'logo16.png'); // 正常托盘图标（Windows 16px 彩色）
-// 闪动变体（白底卡片发光，微信式闪动）：这里必须写完整文件名。
-// 之前路径末尾是空字符串（指向 images 目录），createFromPath 会拿到空图，
-// 闪动时 tray.setImage(空图) 在 macOS 上会把菜单栏图标压成 0 宽 —— 图标直接看不见。
-const FLASH_TRAY_ICON = path.join(__dirname, 'src', 'assets', 'images', 'tray-flash.png');
+const NORMAL_TRAY_ICON = path.join(__dirname, 'src', 'assets', 'images', 'logo16.png'); // 正常托盘图标
+// 闪动变体：Windows 保持原值（空路径，不要改动，Windows 行为不变）；
+// mac 必须指向真实文件 —— 空路径会得到空图，setImage(空图) 会把菜单栏图标压成 0 宽，表现为右上角图标消失。
+const FLASH_TRAY_ICON = path.join(__dirname, 'src', 'assets', 'images',
+  process.platform === 'darwin' ? 'tray-flash.png' : '');
 const MAC_TRAY_ICON = path.join(__dirname, 'src', 'assets', 'images', 'logo32.png'); // mac 菜单栏图标源图（32px，缩放到 18pt）
 // const ALERT_TRAY_ICON = path.join(__dirname, 'src', 'assets', 'images', 'tray-alert.png'); // 兜底提醒图标（红点）
 let normalTrayImage = null; // 正常图标缓存
@@ -495,15 +495,9 @@ function stopTrayFlash() {
  */
 function startTrayFlash() {
   if (!tray) return;
-  // 兜底：基础图标缺失时用 mac 的 32px 源图，避免任何空图进入 setImage
-  if (!normalTrayImage || normalTrayImage.isEmpty()) {
-    normalTrayImage = nativeImage.createFromPath(MAC_TRAY_ICON);
-    if (normalTrayImage.isEmpty()) normalTrayImage = nativeImage.createFromPath(NORMAL_TRAY_ICON);
-  }
+  normalTrayImage = normalTrayImage || nativeImage.createFromPath(NORMAL_TRAY_ICON);
   flashTrayImage = flashTrayImage || nativeImage.createFromPath(FLASH_TRAY_ICON);
-  // 兜底：闪动变体读不到就退回正常图标（宁可只闪 tooltip，也不能让图标消失）
-  if (flashTrayImage.isEmpty()) flashTrayImage = normalTrayImage;
-  alertTrayImage = alertTrayImage || normalTrayImage;
+  alertTrayImage = alertTrayImage || nativeImage.createFromPath(NORMAL_TRAY_ICON);
 
   if (!trayFlashTimer) {
     let showFlash = false;
@@ -1411,27 +1405,17 @@ function setupMacMenu() {
 }
 
 function createTray() {
-  let icon = nativeImage.createFromPath(NORMAL_TRAY_ICON);
+  const iconPath = path.join(__dirname, 'src', 'assets', 'images', 'logo16.png');
+  let icon = nativeImage.createFromPath(iconPath);
 
   if (process.platform === 'darwin') {
     // mac 菜单栏高度 22pt：16px 图标在 Retina 下偏小发虚，
     // 改用 32px 源图缩放到 18pt 内容（其余留白由菜单栏自身处理）
     const hiRes = nativeImage.createFromPath(MAC_TRAY_ICON);
-    if (!hiRes.isEmpty()) icon = hiRes;
-    icon = icon.resize({ width: 18, height: 18 });
+    icon = (hiRes.isEmpty() ? icon : hiRes).resize({ width: 18, height: 18 });
   }
 
-  // 兜底：图标读不到时写日志，避免"菜单栏/托盘没有图标"却查不到原因
-  if (icon.isEmpty()) {
-    console.error('[tray] 图标为空，请检查 src/assets/images 下的 logo16.png / logo32.png');
-  }
-
-  try {
-    tray = new Tray(icon);
-  } catch (e) {
-    console.error('[tray] 创建托盘失败:', (e && e.message) || e);
-    return;
-  }
+  tray = new Tray(icon);
 
   tray.setToolTip(APP_DISPLAY_NAME);
 
